@@ -319,8 +319,11 @@ class PingWorker extends EventEmitter {
     }
     if (this.halted || this.cleanupTimer) return;
     const retentionDays = Math.max(1, Number(process.env.PING_LOG_RETENTION_DAYS || 7));
+    // Bersihkan sekali saat start agar log kedaluwarsa langsung hilang setelah
+    // deploy/restart, lalu ulangi setiap jam.
+    this.cleanup(retentionDays).catch((error) => console.error("Pembersihan log gagal:", error.code || error.message));
     this.cleanupTimer = setInterval(() => {
-      this.cleanup(retentionDays).catch((error) => console.error("Pembersihan ping_logs gagal:", error.code || error.message));
+      this.cleanup(retentionDays).catch((error) => console.error("Pembersihan log gagal:", error.code || error.message));
     }, 60 * 60 * 1000);
     this.cleanupTimer.unref();
     this.timeoutSettingsTimer = setInterval(() => {
@@ -499,6 +502,11 @@ class PingWorker extends EventEmitter {
     }
   }
 
+  // Retensi log: ping_logs dan ping_timeout_logs hanya disimpan selama
+  // retentionDays hari (default 7, env PING_LOG_RETENTION_DAYS); yang lebih
+  // lama dihapus per batch. Umur log timeout dihitung dari waktu mulai
+  // kejadian (started_at), jadi baris hilang tepat setelah berumur
+  // retentionDays hari — termasuk kejadian yang masih berlangsung.
   async cleanup(retentionDays) {
     let affected;
     do {
@@ -508,6 +516,19 @@ class PingWorker extends EventEmitter {
       );
       affected = result.affectedRows;
     } while (affected === CLEANUP_BATCH);
+
+    try {
+      do {
+        const [result] = await this.pool.query(
+          "DELETE FROM ping_timeout_logs WHERE started_at < NOW() - INTERVAL ? DAY LIMIT ?",
+          [retentionDays, CLEANUP_BATCH]
+        );
+        affected = result.affectedRows;
+      } while (affected === CLEANUP_BATCH);
+    } catch (error) {
+      // Instalasi sangat lama bisa belum punya tabel log timeout.
+      if (error.code !== "ER_NO_SUCH_TABLE") throw error;
+    }
   }
 }
 

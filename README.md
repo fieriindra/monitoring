@@ -66,7 +66,7 @@ Tabel dibuat oleh `npm.cmd run db:init` dari `db/002_modules.sql`: `ping_devices
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-`ping_logs` dibersihkan otomatis setiap jam; atur retensi lewat `PING_LOG_RETENTION_DAYS` (default 7 hari).
+Log ping (`ping_logs`) dan log timeout (`ping_timeout_logs`, dihitung dari waktu mulai kejadian) hanya disimpan selama masa retensi lalu dihapus otomatis — pembersihan berjalan sekali saat server start dan setiap jam sesudahnya. Atur retensi lewat `PING_LOG_RETENTION_DAYS` (default 7 hari).
 
 | Endpoint | Fungsi |
 |---|---|
