@@ -306,6 +306,7 @@
     const saveButton = document.getElementById("save-timeout-threshold");
     const refreshButton = document.getElementById("refresh-timeout-log");
     let settingsLoaded = false;
+    let expandedId = null;
 
     function cell(text, sub) {
       const td = document.createElement("td");
@@ -334,7 +335,18 @@
       for (const row of rows) {
         const tr = document.createElement("tr");
         const ongoing = row.state === "ongoing";
-        tr.appendChild(cell(formatDateTime(row.started_at)));
+        tr.className = `log-row${row.id === expandedId ? " open" : ""}`;
+        tr.title = "Klik untuk melihat detail timeout per baris";
+        tr.addEventListener("click", () => {
+          expandedId = expandedId === row.id ? null : row.id;
+          loadLogs().catch((error) => Monitor.toast(error.message, "err"));
+        });
+        const startCell = cell(formatDateTime(row.started_at));
+        const caret = document.createElement("span");
+        caret.className = "log-caret";
+        caret.textContent = "▸";
+        startCell.prepend(caret);
+        tr.appendChild(startCell);
         tr.appendChild(cell(row.device_label || `Perangkat #${row.device_id}`, `${row.device_type || ""} ${row.device_host || ""}`.trim()));
         tr.appendChild(cell(
           row.target ? (row.target_label ? `${row.target_label} → ${row.target}` : row.target) : (row.device_host || "—")
@@ -360,6 +372,56 @@
         ));
         tr.appendChild(cell(`${row.timeout_count}×`));
         body.appendChild(tr);
+
+        if (row.id === expandedId) {
+          const detailRow = document.createElement("tr");
+          const detailCell = document.createElement("td");
+          detailCell.colSpan = 7;
+          detailCell.className = "log-detail-cell";
+          detailCell.textContent = "Memuat detail...";
+          detailRow.appendChild(detailCell);
+          body.appendChild(detailRow);
+          fillDetail(detailCell, row);
+        }
+      }
+    }
+
+    // Isi baris detail sebuah kejadian: satu baris per hasil ping TIMEOUT
+    // selama kejadian berlangsung (kejadian 10 detik ≈ 10 baris).
+    async function fillDetail(detailCell, logRow) {
+      try {
+        const data = await Monitor.api(`/api/ping/timeout-logs/${logRow.id}/detail`);
+        detailCell.replaceChildren();
+        const head = document.createElement("div");
+        head.className = "log-detail-head";
+        const durationText = logRow.state === "ongoing"
+          ? `durasi berjalan ${formatDuration((Date.now() - new Date(logRow.started_at).getTime()) / 1000)}`
+          : `durasi total ${formatDuration(logRow.duration_seconds)}`;
+        head.textContent = `Detail kejadian #${logRow.id}: ${data.total_entries} baris hasil timeout (${durationText})`
+          + (data.truncated ? ` — hanya ${data.entries.length} baris pertama yang ditampilkan` : "");
+        detailCell.appendChild(head);
+
+        if (!data.entries.length) {
+          const empty = document.createElement("div");
+          empty.className = "log-empty";
+          empty.textContent = "Tidak ada baris hasil ping pada jendela kejadian ini (riwayat ping_logs mungkin sudah terhapus oleh retensi).";
+          detailCell.appendChild(empty);
+          return;
+        }
+        const lines = document.createElement("div");
+        lines.className = "log-lines";
+        for (const entry of data.entries) {
+          const line = document.createElement("div");
+          line.className = "log-line";
+          const time = document.createElement("span");
+          time.className = "t";
+          time.textContent = `[${clock(entry.created_at)}]`;
+          line.append(time, document.createTextNode(entry.line));
+          lines.appendChild(line);
+        }
+        detailCell.appendChild(lines);
+      } catch (error) {
+        detailCell.textContent = `Detail gagal dimuat: ${error.message}`;
       }
     }
 

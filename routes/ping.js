@@ -296,6 +296,68 @@ function createPingRouter({ pool, requireApiSession, worker }) {
     }
   });
 
+  // Detail satu kejadian: baris-baris hasil ping TIMEOUT dari ping_logs selama
+  // jendela kejadian (started_at s.d. recovered_at, atau sampai sekarang bila
+  // masih berlangsung) — satu baris per hasil ping, jadi kejadian 10 detik
+  // berisi sekitar 10 baris. Dibatasi DETAIL_MAX_ENTRIES baris; flag
+  // "truncated" menandai bila yang ditampilkan hanya sebagian (yang terlama).
+  const DETAIL_MAX_ENTRIES = 3600;
+  router.get("/timeout-logs/:id/detail", async (request, response, next) => {
+    try {
+      const id = v.positiveId(request.params.id);
+      const [logs] = await pool.execute(
+        `SELECT l.id, l.device_id, l.target, l.started_at, l.recorded_at, l.recovered_at,
+                l.duration_seconds, l.timeout_count,
+                d.label AS device_label, d.host AS device_host, d.device_type AS device_type,
+                t.label AS target_label
+         FROM ping_timeout_logs l
+         JOIN ping_devices d ON d.id = l.device_id
+         LEFT JOIN ping_targets t ON t.device_id = l.device_id AND t.target = l.target
+         WHERE l.id = ? LIMIT 1`,
+        [id]
+      );
+      if (!logs.length) return response.status(404).json({ error: "Log timeout tidak ditemukan." });
+      const log = logs[0];
+
+      // Jendela dibandingkan sebagai epoch (UNIX_TIMESTAMP) agar tetap benar
+      // walau zona waktu MySQL dan zona waktu proses Node berbeda: started_at
+      // tersimpan sebagai DATETIME waktu lokal Node, sedangkan created_at
+      // ping_logs adalah TIMESTAMP yang diisi MySQL — perbandingan string
+      // tanggal mentah bisa meleset sebesar selisih zona waktu.
+      const startEpoch = Math.floor(new Date(log.started_at).getTime() / 1000);
+      const endEpoch = Math.floor((log.recovered_at ? new Date(log.recovered_at).getTime() : Date.now()) / 1000);
+      const targetCondition = log.target === null ? "p.target IS NULL" : "p.target = ?";
+      const windowParams = log.target === null ? [log.device_id] : [log.device_id, log.target];
+      const windowPredicate = `p.device_id = ? AND ${targetCondition} AND p.status = 'TIMEOUT'
+           AND UNIX_TIMESTAMP(p.created_at) >= ? AND UNIX_TIMESTAMP(p.created_at) <= ?`;
+      const [[{ total }]] = await pool.query(
+        `SELECT COUNT(*) AS total FROM ping_logs p WHERE ${windowPredicate}`,
+        [...windowParams, startEpoch, endEpoch]
+      );
+      const [entryRows] = await pool.query(
+        `SELECT UNIX_TIMESTAMP(p.created_at) AS created_ts, p.latency, p.status, p.raw_output
+         FROM ping_logs p
+         WHERE ${windowPredicate}
+         ORDER BY p.created_at ASC, p.id ASC LIMIT ?`,
+        [...windowParams, startEpoch, endEpoch, DETAIL_MAX_ENTRIES]
+      );
+      return response.json({
+        log: { ...log, state: log.recovered_at ? "recovered" : "ongoing" },
+        total_entries: Number(total),
+        truncated: Number(total) > entryRows.length,
+        entries: entryRows.map((row) => ({
+          created_at: new Date(Number(row.created_ts) * 1000).toISOString(),
+          status: row.status,
+          latency: row.latency,
+          line: summarize(row.raw_output, log.target || log.device_host)
+        }))
+      });
+    } catch (error) {
+      if (error.code === "ER_NO_SUCH_TABLE") return response.status(404).json({ error: "Log timeout tidak ditemukan." });
+      return next(error);
+    }
+  });
+
   // Riwayat terbaru per perangkat+tujuan aktif, untuk mengisi terminal sebelum WebSocket mengalir.
   // Kunci hasil: "<device_id>" (tanpa target) atau "<device_id>:<target>".
   router.get("/recent", async (request, response, next) => {

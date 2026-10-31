@@ -131,6 +131,15 @@ h2 { margin: 0; font-size: 20px; letter-spacing: -.4px; }
 .log-badge.ongoing { background: var(--red-dim); color: var(--red); }
 .log-badge.recovered { background: var(--green-dim); color: var(--green); }
 .log-empty { color: var(--muted); text-align: center !important; }
+.log-table tbody tr.log-row { cursor: pointer; }
+.log-table tbody tr.log-row:hover td { background: rgba(77, 163, 255, .05); }
+.log-caret { display: inline-block; margin-right: 7px; color: var(--muted); transition: transform .15s; }
+.log-row.open .log-caret { transform: rotate(90deg); color: var(--text); }
+.log-detail-cell { background: #0b1119; white-space: normal; cursor: default; }
+.log-detail-head { margin-bottom: 8px; font-weight: 600; }
+.log-lines { max-height: 260px; overflow-y: auto; font-family: var(--mono); font-size: 12px; line-height: 1.7; }
+.log-line { color: var(--red); }
+.log-line .t { margin-right: 8px; color: var(--muted); }
 .arrange-grid {
   display: grid; grid-auto-flow: column; gap: 14px; margin-top: 26px;
 }
