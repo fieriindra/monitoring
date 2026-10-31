@@ -222,9 +222,41 @@ body[data-module="ping"] .action-grid { grid-template-columns: repeat(4, minmax(
 
 @media (max-width: 900px) {
   .action-grid { grid-template-columns: 1fr; }
+  /* Aturan 4 kolom khusus ping lebih spesifik daripada .action-grid di atas,
+     jadi perlu ditimpa eksplisit agar kartu hub menumpuk di layar kecil. */
+  body[data-module="ping"] .action-grid { grid-template-columns: 1fr; }
   .form-grid { grid-template-columns: 1fr; }
-  .arrange-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* Grid ATUR POSISI diatur inline oleh JS (mengikuti kapasitas slot);
+     di layar kecil susunannya ditimpa jadi mengalir per baris. */
+  .arrange-grid { grid-auto-flow: row; grid-template-columns: repeat(2, minmax(0, 1fr)) !important; grid-template-rows: none !important; }
   .noc-shell { width: min(100% - 32px, 560px); }
+  /* Tabel log sedikit dipadatkan; wadahnya tetap bisa digeser mendatar. */
+  .log-table { font-size: 12.5px; }
+  .log-table th, .log-table td { padding: 8px 10px; }
+  /* Layar TAMPILKAN di layar kecil: sel ditumpuk vertikal dan bisa di-scroll
+     (grid asli dinding 4x3 dari JS ditimpa), dan bilah keluar selalu terlihat
+     karena di layar sentuh tidak ada hover maupun tombol ESC. */
+  .display-view { overflow-y: auto; }
+  .display-grid { grid-auto-flow: row; grid-template-columns: 1fr !important; grid-template-rows: none !important; height: auto; min-height: 100%; }
+  .display-grid .cell { height: 48vh; min-height: 260px; }
+  .exit-bar { opacity: 1; }
+}
+
+@media (max-width: 600px) {
+  .arrange-grid { grid-template-columns: 1fr !important; }
+  .noc-top { flex-wrap: wrap; row-gap: 10px; }
+  .noc-shell { width: min(100% - 24px, 560px); }
+  /* Di HP tabel log membungkus teks per kata agar kolom menyempit tanpa
+     memotong kata. Kolom TERCATAT dan TIMEOUT BERURUTAN disembunyikan
+     khusus di layar sangat kecil agar kolom inti (mulai, perangkat,
+     tujuan, status, durasi) tampil utuh tanpa menggeser; jumlah timeout
+     tetap terlihat dari detail per baris dan kedua kolom tampil normal
+     di layar yang lebih lebar. */
+  .log-table { white-space: normal; font-size: 11px; }
+  .log-table th, .log-table td { padding: 6px; overflow-wrap: break-word; }
+  .log-table th:nth-child(4), .log-table td:nth-child(4),
+  .log-table th:nth-child(7), .log-table td:nth-child(7) { display: none; }
+  .log-badge { padding: 2px 7px; font-size: 10px; letter-spacing: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -406,7 +406,7 @@ button, input, a { font: inherit; }
 @media (max-width: 600px) {
   .shell { width: min(100% - 36px, 480px); padding-top: 22px; }
   .topbar { align-items: flex-start; }
-  .user-tools { gap: 9px; font-size: 12px; }
+  .user-tools { gap: 9px; font-size: 12px; flex-wrap: wrap; justify-content: flex-end; }
   .content { padding-top: 42px; }
   .module-grid { grid-template-columns: 1fr; gap: 13px; margin-top: 28px; }
   .module-card { min-height: 210px; padding: 21px; }
