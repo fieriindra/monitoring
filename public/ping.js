@@ -275,6 +275,149 @@
     };
   }
 
+  /* ---------- Log Timeout / RTO ---------- */
+  // Daftar kejadian RTO berurutan dari /api/ping/timeout-logs + ambang
+  // pencatatannya dari /api/ping/timeout-settings (default 3 detik).
+
+  function formatDateTime(value) {
+    if (!value) return "—";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "—";
+    return date.toLocaleString("id-ID", {
+      day: "2-digit", month: "short", year: "numeric",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false
+    });
+  }
+
+  function formatDuration(totalSeconds) {
+    if (totalSeconds == null) return "—";
+    const seconds = Math.max(0, Math.round(totalSeconds));
+    if (seconds < 60) return `${seconds} dtk`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return seconds % 60 ? `${minutes} mnt ${seconds % 60} dtk` : `${minutes} mnt`;
+    const hours = Math.floor(minutes / 60);
+    return minutes % 60 ? `${hours} jam ${minutes % 60} mnt` : `${hours} jam`;
+  }
+
+  function initTimeoutLog() {
+    const body = document.getElementById("timeout-log-body");
+    if (!body) return;
+    const thresholdInput = document.getElementById("f-timeout-threshold");
+    const saveButton = document.getElementById("save-timeout-threshold");
+    const refreshButton = document.getElementById("refresh-timeout-log");
+    let settingsLoaded = false;
+
+    function cell(text, sub) {
+      const td = document.createElement("td");
+      td.textContent = text;
+      if (sub) {
+        const small = document.createElement("span");
+        small.className = "sub";
+        small.textContent = sub;
+        td.appendChild(small);
+      }
+      return td;
+    }
+
+    function renderRows(rows) {
+      body.replaceChildren();
+      if (!rows.length) {
+        const tr = document.createElement("tr");
+        const td = document.createElement("td");
+        td.colSpan = 7;
+        td.className = "log-empty";
+        td.textContent = "Belum ada log timeout. Kejadian RTO berurutan yang mencapai ambang akan muncul di sini.";
+        tr.appendChild(td);
+        body.appendChild(tr);
+        return;
+      }
+      for (const row of rows) {
+        const tr = document.createElement("tr");
+        const ongoing = row.state === "ongoing";
+        tr.appendChild(cell(formatDateTime(row.started_at)));
+        tr.appendChild(cell(row.device_label || `Perangkat #${row.device_id}`, `${row.device_type || ""} ${row.device_host || ""}`.trim()));
+        tr.appendChild(cell(
+          row.target ? (row.target_label ? `${row.target_label} → ${row.target}` : row.target) : (row.device_host || "—")
+        ));
+        tr.appendChild(cell(formatDateTime(row.recorded_at)));
+        const statusCell = document.createElement("td");
+        const badge = document.createElement("span");
+        badge.className = `log-badge ${ongoing ? "ongoing" : "recovered"}`;
+        badge.textContent = ongoing ? "BERLANGSUNG" : "PULIH";
+        statusCell.appendChild(badge);
+        if (!ongoing && row.recovered_at) {
+          const small = document.createElement("span");
+          small.className = "sub";
+          small.textContent = formatDateTime(row.recovered_at);
+          statusCell.appendChild(small);
+        }
+        tr.appendChild(statusCell);
+        tr.appendChild(cell(
+          ongoing
+            ? formatDuration((Date.now() - new Date(row.started_at).getTime()) / 1000)
+            : formatDuration(row.duration_seconds),
+          ongoing ? "masih berjalan" : null
+        ));
+        tr.appendChild(cell(`${row.timeout_count}×`));
+        body.appendChild(tr);
+      }
+    }
+
+    async function loadLogs() {
+      const rows = await Monitor.api("/api/ping/timeout-logs?limit=50");
+      renderRows(Array.isArray(rows) ? rows : []);
+    }
+
+    async function loadSettings() {
+      const settings = await Monitor.api("/api/ping/timeout-settings");
+      if (settings && Number.isInteger(settings.threshold_seconds)) {
+        thresholdInput.value = settings.threshold_seconds;
+        settingsLoaded = true;
+      }
+    }
+
+    async function loadAll() {
+      try {
+        if (!settingsLoaded) await loadSettings();
+        await loadLogs();
+      } catch (error) {
+        Monitor.toast(error.message, "err");
+      }
+    }
+
+    saveButton.addEventListener("click", async () => {
+      const value = Number(thresholdInput.value);
+      if (!Number.isInteger(value) || value < 1 || value > 3600) {
+        Monitor.toast("Ambang harus bilangan bulat 1-3600 detik.", "err");
+        return;
+      }
+      saveButton.disabled = true;
+      try {
+        const saved = await Monitor.api("/api/ping/timeout-settings", {
+          method: "PUT",
+          body: { threshold_seconds: value }
+        });
+        thresholdInput.value = saved.threshold_seconds;
+        settingsLoaded = true;
+        Monitor.toast(`Ambang log timeout disimpan: ${saved.threshold_seconds} detik.`);
+      } catch (error) {
+        Monitor.toast(error.message, "err");
+      } finally {
+        saveButton.disabled = false;
+      }
+    });
+    refreshButton.addEventListener("click", loadAll);
+
+    loadAll();
+    // Segarkan daftar secara berkala selama halaman menu Ping Monitoring terbuka.
+    setInterval(() => {
+      const menuView = document.querySelector('[data-view="menu"]');
+      if (menuView && !menuView.hidden) loadLogs().catch(() => {});
+    }, 15000);
+  }
+
+  initTimeoutLog();
+
   Monitor.register({
     endpoint: "/api/ping/devices",
     noun: "perangkat",

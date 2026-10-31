@@ -75,3 +75,33 @@ CREATE TABLE IF NOT EXISTS ping_logs (
   CONSTRAINT fk_ping_logs_device FOREIGN KEY (device_id)
     REFERENCES ping_devices (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- LOG TIMEOUT: satu baris per kejadian RTO/timeout BERURUTAN yang umurnya mencapai
+-- ambang pada ping_timeout_settings. Baris dibuat saat ambang tercapai
+-- (started_at = awal rangkaian, recorded_at = saat ambang tercapai), lalu dilengkapi
+-- recovered_at + duration_seconds + timeout_count akhir saat tujuan kembali UP.
+-- Tabel-tabel ini juga dibuat otomatis oleh worker saat start, jadi instalasi lama
+-- tidak perlu menjalankan migrasi manual.
+CREATE TABLE IF NOT EXISTS ping_timeout_settings (
+  id TINYINT NOT NULL PRIMARY KEY, -- selalu 1 (satu baris pengaturan global)
+  threshold_seconds INT NOT NULL DEFAULT 3,
+  CONSTRAINT chk_ping_timeout_threshold CHECK (threshold_seconds BETWEEN 1 AND 3600)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT IGNORE INTO ping_timeout_settings (id, threshold_seconds) VALUES (1, 3);
+
+CREATE TABLE IF NOT EXISTS ping_timeout_logs (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  device_id INT NOT NULL,
+  target VARCHAR(100) NULL,
+  started_at DATETIME NOT NULL,
+  recorded_at DATETIME NOT NULL,
+  recovered_at DATETIME NULL,
+  duration_seconds INT NULL,
+  timeout_count INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_ping_timeout_logs_created (created_at),
+  KEY idx_ping_timeout_logs_device (device_id, created_at),
+  CONSTRAINT fk_ping_timeout_logs_device FOREIGN KEY (device_id)
+    REFERENCES ping_devices (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

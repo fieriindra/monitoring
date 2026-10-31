@@ -2,6 +2,7 @@ const { EventEmitter } = require("node:events");
 const { Client } = require("ssh2");
 const { decrypt } = require("../lib/crypto");
 const { parsePing, summarize } = require("../lib/parsers");
+const { TimeoutTracker } = require("../lib/timeoutTracker");
 
 const INTERVAL_MS = 1000;
 const CONNECT_TIMEOUT_MS = 8000;
@@ -14,6 +15,11 @@ const CONNECT_TIMEOUT_MS = 8000;
 const COMMAND_TIMEOUT_MS = 20000;
 const MAX_OUTPUT_CHARS = 4000;
 const CLEANUP_BATCH = 10000;
+// LOG TIMEOUT: ambang default rangkaian RTO berurutan sebelum dicatat (detik).
+// Nilai aktif dibaca dari tabel ping_timeout_settings dan disegarkan berkala,
+// jadi perubahan dari halaman Ping Monitoring berlaku tanpa restart.
+const DEFAULT_TIMEOUT_THRESHOLD_SECONDS = 3;
+const TIMEOUT_SETTINGS_REFRESH_MS = 10000;
 const HUAWEI_PROMPT_RE = /(?:<[^>\r\n]+>|\[[^\]\r\n]+\])\s*$/;
 const HUAWEI_PROMPT_ANYWHERE_RE = /(?:<[^>\r\n]+>|\[[^\]\r\n]+\])/;
 
@@ -291,6 +297,10 @@ class PingWorker extends EventEmitter {
     this.loops = new Map();
     this.cleanupTimer = null;
     this.halted = false;
+    this.timeoutTracker = new TimeoutTracker();
+    this.timeoutLogIds = new Map();
+    this.timeoutThresholdSeconds = DEFAULT_TIMEOUT_THRESHOLD_SECONDS;
+    this.timeoutSettingsTimer = null;
   }
 
   // Dipanggil saat aplikasi start. Mencoba ulang sampai MySQL siap.
@@ -298,6 +308,8 @@ class PingWorker extends EventEmitter {
     this.halted = false;
     while (!this.halted) {
       try {
+        await this.ensureTimeoutLogSchema();
+        await this.refreshTimeoutThreshold();
         await this.reload();
         break;
       } catch (error) {
@@ -311,14 +323,64 @@ class PingWorker extends EventEmitter {
       this.cleanup(retentionDays).catch((error) => console.error("Pembersihan ping_logs gagal:", error.code || error.message));
     }, 60 * 60 * 1000);
     this.cleanupTimer.unref();
+    this.timeoutSettingsTimer = setInterval(() => {
+      this.refreshTimeoutThreshold().catch(() => {});
+    }, TIMEOUT_SETTINGS_REFRESH_MS);
+    this.timeoutSettingsTimer.unref();
   }
 
   stop() {
     this.halted = true;
     clearInterval(this.cleanupTimer);
     this.cleanupTimer = null;
+    clearInterval(this.timeoutSettingsTimer);
+    this.timeoutSettingsTimer = null;
     for (const loop of this.loops.values()) loop.stop();
     this.loops.clear();
+  }
+
+  // Tabel LOG TIMEOUT dibuat otomatis (identik dengan db/002_modules.sql) agar
+  // instalasi lama yang hanya deploy + restart langsung mendapat fitur ini.
+  async ensureTimeoutLogSchema() {
+    await this.pool.query(
+      `CREATE TABLE IF NOT EXISTS ping_timeout_settings (
+        id TINYINT NOT NULL PRIMARY KEY,
+        threshold_seconds INT NOT NULL DEFAULT 3,
+        CONSTRAINT chk_ping_timeout_threshold CHECK (threshold_seconds BETWEEN 1 AND 3600)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+    );
+    await this.pool.query("INSERT IGNORE INTO ping_timeout_settings (id, threshold_seconds) VALUES (1, 3)");
+    await this.pool.query(
+      `CREATE TABLE IF NOT EXISTS ping_timeout_logs (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        device_id INT NOT NULL,
+        target VARCHAR(100) NULL,
+        started_at DATETIME NOT NULL,
+        recorded_at DATETIME NOT NULL,
+        recovered_at DATETIME NULL,
+        duration_seconds INT NULL,
+        timeout_count INT NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_ping_timeout_logs_created (created_at),
+        KEY idx_ping_timeout_logs_device (device_id, created_at),
+        CONSTRAINT fk_ping_timeout_logs_device FOREIGN KEY (device_id)
+          REFERENCES ping_devices (id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+    );
+  }
+
+  // Ambang aktif dari pengaturan global; gagal baca (MySQL belum siap) memakai
+  // nilai terakhir yang diketahui, dan awalnya default 3 detik.
+  async refreshTimeoutThreshold() {
+    try {
+      const [rows] = await this.pool.execute("SELECT threshold_seconds FROM ping_timeout_settings WHERE id = 1");
+      const value = rows.length ? Number(rows[0].threshold_seconds) : NaN;
+      if (Number.isInteger(value) && value >= 1 && value <= 3600) {
+        this.timeoutThresholdSeconds = value;
+      }
+    } catch {
+      // Abaikan: nilai terakhir tetap dipakai.
+    }
   }
 
   // Sinkronkan loop dengan isi ping_devices aktif (urut slot_order). Dipanggil setelah tambah/hapus.
@@ -338,6 +400,14 @@ class PingWorker extends EventEmitter {
       if (!wanted.has(id)) {
         loop.stop();
         this.loops.delete(id);
+      }
+    }
+
+    // Perangkat yang sudah tidak aktif/dihapus tidak perlu dilacak rangkaian timeout-nya.
+    for (const key of [...this.timeoutTracker.streaks.keys()]) {
+      if (!wanted.has(Number(key.split("|")[0]))) {
+        this.timeoutTracker.forget(key);
+        this.timeoutLogIds.delete(key);
       }
     }
 
@@ -386,6 +456,47 @@ class PingWorker extends EventEmitter {
       raw: output,
       created_at: createdAt.toISOString()
     });
+    try {
+      await this.trackTimeout(device, target || null, status, createdAt);
+    } catch (error) {
+      console.error("Pelacakan log timeout gagal:", error.code || error.message);
+    }
+  }
+
+  // LOG TIMEOUT: masukkan hasil ke pelacak rangkaian; event "record" menjadi
+  // baris baru ping_timeout_logs, event "recover" melengkapi baris yang sama.
+  async trackTimeout(device, target, status, createdAt) {
+    const key = `${device.id}|${target || ""}`;
+    const event = this.timeoutTracker.feed(key, status, createdAt.getTime(), this.timeoutThresholdSeconds);
+    if (!event) return;
+
+    if (event.type === "record") {
+      try {
+        const [result] = await this.pool.execute(
+          "INSERT INTO ping_timeout_logs (device_id, target, started_at, recorded_at, timeout_count) VALUES (?, ?, ?, ?, ?)",
+          [device.id, target, new Date(event.startedAt), new Date(event.recordedAt), event.timeoutCount]
+        );
+        this.timeoutLogIds.set(key, result.insertId);
+      } catch (error) {
+        // Perangkat dihapus saat loop berjalan (FK) atau MySQL sementara tidak tersedia:
+        // izinkan event terbit lagi pada hasil TIMEOUT berikutnya.
+        if (error.code !== "ER_NO_REFERENCED_ROW_2") console.error("Gagal menyimpan log timeout:", error.code || error.message);
+        this.timeoutTracker.markUnrecorded(key);
+      }
+      return;
+    }
+
+    const logId = this.timeoutLogIds.get(key);
+    this.timeoutLogIds.delete(key);
+    if (!logId) return;
+    try {
+      await this.pool.execute(
+        "UPDATE ping_timeout_logs SET recovered_at = ?, duration_seconds = ?, timeout_count = ? WHERE id = ?",
+        [new Date(event.endedAt), event.durationSeconds, event.timeoutCount, logId]
+      );
+    } catch (error) {
+      console.error("Gagal melengkapi log timeout:", error.code || error.message);
+    }
   }
 
   async cleanup(retentionDays) {

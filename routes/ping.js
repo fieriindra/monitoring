@@ -241,6 +241,61 @@ function createPingRouter({ pool, requireApiSession, worker }) {
     }
   });
 
+  // ===== LOG TIMEOUT =====
+  // Pengaturan ambang global: rangkaian RTO/timeout berurutan dicatat ke log
+  // setelah berlangsung selama threshold_seconds (default 3, rentang 1-3600).
+
+  router.get("/timeout-settings", async (_request, response, next) => {
+    try {
+      const [rows] = await pool.execute("SELECT threshold_seconds FROM ping_timeout_settings WHERE id = 1");
+      return response.json({ threshold_seconds: rows.length ? Number(rows[0].threshold_seconds) : 3 });
+    } catch (error) {
+      // Tabel belum dibuat (worker belum sempat start): tampilkan nilai default.
+      if (error.code === "ER_NO_SUCH_TABLE") return response.json({ threshold_seconds: 3 });
+      return next(error);
+    }
+  });
+
+  router.put("/timeout-settings", async (request, response, next) => {
+    try {
+      const threshold = v.integer(request.body, "threshold_seconds", { label: "Ambang timeout", min: 1, max: 3600 });
+      if (typeof worker.ensureTimeoutLogSchema === "function") await worker.ensureTimeoutLogSchema();
+      await pool.execute(
+        `INSERT INTO ping_timeout_settings (id, threshold_seconds) VALUES (1, ?)
+         ON DUPLICATE KEY UPDATE threshold_seconds = VALUES(threshold_seconds)`,
+        [threshold]
+      );
+      // Terapkan langsung ke worker yang sedang berjalan (tanpa menunggu
+      // penyegaran berkala dan tanpa restart).
+      if (typeof worker.refreshTimeoutThreshold === "function") await worker.refreshTimeoutThreshold();
+      return response.json({ threshold_seconds: threshold });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  // Log kejadian RTO/timeout berurutan, terbaru lebih dulu.
+  router.get("/timeout-logs", async (request, response, next) => {
+    try {
+      const limit = Math.min(Math.max(parseInt(request.query.limit, 10) || 50, 1), 200);
+      const [rows] = await pool.query(
+        `SELECT l.id, l.device_id, l.target, l.started_at, l.recorded_at, l.recovered_at,
+                l.duration_seconds, l.timeout_count,
+                d.label AS device_label, d.host AS device_host, d.device_type AS device_type,
+                t.label AS target_label
+         FROM ping_timeout_logs l
+         JOIN ping_devices d ON d.id = l.device_id
+         LEFT JOIN ping_targets t ON t.device_id = l.device_id AND t.target = l.target
+         ORDER BY l.id DESC LIMIT ?`,
+        [limit]
+      );
+      return response.json(rows.map((row) => ({ ...row, state: row.recovered_at ? "recovered" : "ongoing" })));
+    } catch (error) {
+      if (error.code === "ER_NO_SUCH_TABLE") return response.json([]);
+      return next(error);
+    }
+  });
+
   // Riwayat terbaru per perangkat+tujuan aktif, untuk mengisi terminal sebelum WebSocket mengalir.
   // Kunci hasil: "<device_id>" (tanpa target) atau "<device_id>:<target>".
   router.get("/recent", async (request, response, next) => {
