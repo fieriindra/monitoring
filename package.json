@@ -1,0 +1,22 @@
+{
+  "name": "nadi-monitoring",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Aplikasi login untuk monitoring ping dan PRTG",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "db:init": "node scripts/init-db.js",
+    "db:seed": "node scripts/seed-user.js",
+    "db:backup": "node scripts/backup-db.js",
+    "db:restore": "node scripts/restore-db.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "mysql2": "^3.14.1",
+    "ssh2": "^1.17.0",
+    "ws": "^8.22.0"
+  }
+}

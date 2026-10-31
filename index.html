@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0a0e14">
+  <meta name="description" content="Masuk ke Monitoring untuk memantau jaringan dan PRTG.">
+  <title>Masuk — Monitoring</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body class="login-page">
+  <main class="login">
+    <a class="brand" href="#" aria-label="Monitoring">
+      <span class="brand-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none">
+          <path d="M3 12h4l2.5-7 5 14 2.5-7h4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </span>
+      <span>Monitoring</span>
+    </a>
+
+    <h1>Selamat datang</h1>
+    <p class="subtitle">Masuk untuk memantau koneksi ping dan perangkat PRTG Anda.</p>
+
+    <form id="login-form">
+      <div class="field">
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" placeholder="Masukkan username" autocomplete="username" maxlength="64" required>
+      </div>
+
+      <div class="field">
+        <label for="password">Kata sandi</label>
+        <div class="input-wrap">
+          <input id="password" name="password" type="password" placeholder="Masukkan kata sandi" autocomplete="current-password" required>
+          <button class="toggle" id="toggle-password" type="button" aria-label="Tampilkan kata sandi" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z" stroke="currentColor" stroke-width="1.7"/>
+              <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.7"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="options">
+        <label class="remember"><input type="checkbox" name="remember"> Ingat saya</label>
+        <a class="forgot" href="mailto:admin@perusahaan.com?subject=Reset%20kata%20sandi">Lupa kata sandi?</a>
+      </div>
+
+      <button class="submit" type="submit">Masuk</button>
+      <p class="message" id="form-message" role="status" aria-live="polite"></p>
+    </form>
+
+    <p class="footer">Akses khusus untuk pengguna terotorisasi</p>
+  </main>
+
+  <script>
+    const passwordInput = document.querySelector("#password");
+    const togglePassword = document.querySelector("#toggle-password");
+    const loginForm = document.querySelector("#login-form");
+    const formMessage = document.querySelector("#form-message");
+    const submitButton = loginForm.querySelector(".submit");
+
+    togglePassword.addEventListener("click", () => {
+      const isVisible = passwordInput.type === "text";
+      passwordInput.type = isVisible ? "password" : "text";
+      togglePassword.setAttribute("aria-pressed", String(!isVisible));
+      togglePassword.setAttribute("aria-label", isVisible ? "Tampilkan kata sandi" : "Sembunyikan kata sandi");
+    });
+
+    loginForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      formMessage.textContent = "";
+      formMessage.style.color = "#ff8b95";
+
+      if (!["http:", "https:"].includes(window.location.protocol)) {
+        formMessage.textContent = "Buka aplikasi melalui http://localhost:3000. Jangan buka file HTML langsung.";
+        return;
+      }
+
+      submitButton.disabled = true;
+      submitButton.textContent = "Memeriksa...";
+
+      fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          username: loginForm.elements.username.value,
+          password: passwordInput.value
+        })
+      })
+        .then(async (response) => {
+          const responseText = await response.text();
+          let result;
+          try {
+            result = JSON.parse(responseText);
+          } catch {
+            const detail = responseText.trim().slice(0, 100);
+            if (response.status === 403 || /^forbidden\.?$/i.test(detail)) {
+              throw new Error("Server menolak permintaan. Jalankan aplikasi Monitoring di http://localhost:3000.");
+            }
+            throw new Error(`Respons server tidak valid (HTTP ${response.status}). Pastikan backend Monitoring berjalan di http://localhost:3000.`);
+          }
+          if (!response.ok) throw new Error(result.error || `Login gagal (HTTP ${response.status}).`);
+          if (typeof result.redirect !== "string" || !result.redirect.startsWith("/")) {
+            throw new Error("Server memberikan alamat tujuan login yang tidak valid.");
+          }
+          window.location.assign(result.redirect);
+        })
+        .catch((error) => {
+          formMessage.style.color = "#ff8b95";
+          formMessage.textContent = error instanceof TypeError
+            ? "Server tidak dapat dihubungi. Jalankan aplikasi Monitoring di http://localhost:3000."
+            : error.message;
+        })
+        .finally(() => {
+          submitButton.disabled = false;
+          submitButton.textContent = "Masuk";
+        });
+    });
+  </script>
+</body>
+</html>

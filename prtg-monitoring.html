@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0a0e14">
+  <meta name="description" content="PRTG Monitoring: tampilkan grafik dan traffic sensor PRTG dalam satu layar.">
+  <title>PRTG Monitoring — Monitoring</title>
+  <link rel="stylesheet" href="/noc.css">
+</head>
+<body class="noc" data-module="prtg">
+  <main class="noc-shell">
+    <header class="noc-top">
+      <a class="brand" href="/menu" aria-label="Monitoring">
+        <span class="brand-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M3 12h4l2.5-7 5 14 2.5-7h4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        Monitoring
+      </a>
+      <div class="user-tools">
+        <span>Halo, <strong data-username>...</strong></span>
+        <a class="btn" href="/ganti-password">Ganti Password</a>
+        <button class="btn" type="button" data-logout>Keluar</button>
+      </div>
+    </header>
+
+    <!-- MENU AKSI -->
+    <section class="noc-view" data-view="menu">
+      <a class="back-link" href="/menu">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M19 12H5m6 6-6-6 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Kembali ke pilihan monitoring
+      </a>
+      <p class="eyebrow">Monitoring jaringan</p>
+      <h1>PRTG Monitoring</h1>
+      <p class="intro">Tampilkan grafik live sensor PRTG beserta Traffic In/Out terkini. Kredensial PRTG hanya dipakai server, tidak pernah sampai ke browser.</p>
+      <span class="counter" data-counter>memuat...</span>
+
+      <div class="action-grid">
+        <button class="action-card" type="button" id="btn-tampilkan" data-go="tampilkan">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="13" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M8 21h8M12 17v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>
+          <strong>TAMPILKAN</strong>
+          <span class="desc">Layar penuh berisi grafik PRTG (multi-slide bergantian jika perlu), refresh otomatis tiap 30 detik. Tekan ESC untuk keluar.</span>
+        </button>
+        <button class="action-card" type="button" id="btn-tambah" data-go="tambah">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+          <strong>TAMBAH</strong>
+          <span class="desc">Daftarkan sensor PRTG baru lengkap dengan rentang waktu grafik.</span>
+        </button>
+        <button class="action-card" type="button" id="btn-atur" data-go="atur">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none"><path d="M5 9h14M5 15h14M9 5l-4 4 4 4M15 11l4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          <strong>ATUR POSISI</strong>
+          <span class="desc">Seret kartu untuk mengubah urutan slot, atau hapus sensor.</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- TAMBAH -->
+    <section class="noc-view" data-view="tambah" hidden>
+      <button class="back-link" type="button" data-go="menu">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M19 12H5m6 6-6-6 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Kembali ke menu aksi
+      </button>
+      <p class="eyebrow">PRTG Monitoring</p>
+      <h1>Tambah Sensor</h1>
+      <p class="intro">Passhash disimpan terenkripsi di MySQL. Dapatkan passhash dari PRTG: Setup → Account Settings → My Account. Jika server PRTG sama dengan sensor yang sudah ada, kosongkan IP, Username, dan Passhash — cukup isi Label dan ID sensor.</p>
+
+      <form class="panel" id="add-form" autocomplete="off">
+        <div class="form-grid">
+          <div class="field">
+            <label for="f-label">Label</label>
+            <input id="f-label" name="label" maxlength="100" required placeholder="mis. Uplink ISP A">
+          </div>
+          <div class="field">
+            <label for="f-range">Rentang waktu grafik</label>
+            <select id="f-range" name="time_range" required>
+              <option value="2h">2 jam</option>
+              <option value="24h">24 jam</option>
+              <option value="7d">7 hari</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="f-ip">IP / host server PRTG</label>
+            <input id="f-ip" name="prtg_ip" maxlength="100" placeholder="10.0.0.5 atau 10.0.0.5:8080" pattern="[A-Za-z0-9.\-]+(:[0-9]{1,5})?">
+            <small>Kosongkan untuk pakai server dari sensor yang sudah ada.</small>
+          </div>
+          <div class="field">
+            <label for="f-sensor">ID sensor PRTG</label>
+            <input id="f-sensor" name="sensor_id" type="number" min="1" required placeholder="2001">
+          </div>
+          <div class="field">
+            <label for="f-user">Username PRTG</label>
+            <input id="f-user" name="username" maxlength="100" autocomplete="off">
+            <small>Kosongkan untuk pakai username dari sensor yang sudah ada.</small>
+          </div>
+          <div class="field">
+            <label for="f-passhash">Passhash PRTG</label>
+            <input id="f-passhash" name="passhash" type="password" maxlength="128" autocomplete="new-password">
+            <small>Kosongkan untuk pakai passhash dari sensor yang sudah ada (atau, saat edit, tetap memakai yang lama).</small>
+          </div>
+        </div>
+        <p class="form-error" data-form-error role="alert"></p>
+        <div class="form-actions">
+          <button class="btn primary" type="submit" id="btn-simpan">Simpan sensor</button>
+          <button class="btn" type="button" data-go="menu">Batal</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- ATUR POSISI -->
+    <section class="noc-view" data-view="atur" hidden>
+      <button class="back-link" type="button" data-go="menu">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M19 12H5m6 6-6-6 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Kembali ke menu aksi
+      </button>
+      <p class="eyebrow">PRTG Monitoring</p>
+      <h1>Atur Posisi</h1>
+      <p class="intro">Seret kartu ke posisi baru (atau pakai tombol ◀ ▶ / tombol panah keyboard), lalu simpan layout. Urutan atas ke bawah dulu, baru lanjut kolom berikutnya sesuai kapasitas slot.</p>
+      <div class="settings-bar">
+        <label>Kapasitas slot per slide
+          <select id="f-capacity">
+            <option value="2">2</option><option value="4">4</option><option value="6">6</option>
+            <option value="8">8</option><option value="10">10</option><option value="12" selected>12</option>
+            <option value="14">14</option><option value="16">16</option>
+          </select>
+        </label>
+        <label>Jeda putar slide (detik)
+          <input type="number" id="f-rotate" min="5" max="600" step="1" value="30">
+        </label>
+        <button class="btn" type="button" id="save-settings">Simpan Pengaturan</button>
+        <small>Lebih dari kapasitas = otomatis dibagi ke slide berikutnya, lalu berputar bergantian.</small>
+      </div>
+      <div class="arrange-grid" id="arrange-grid"></div>
+      <div class="form-actions">
+        <button class="btn primary" type="button" id="save-layout">Simpan Layout</button>
+        <button class="btn" type="button" data-go="menu">Kembali</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- TAMPILKAN: fullscreen hingga 4 kolom x 4 baris -->
+  <section class="display-view" data-view="tampilkan" hidden aria-label="Layar monitoring PRTG">
+    <div class="display-grid" id="display-grid"></div>
+    <div class="exit-bar">
+      <button class="btn" type="button" id="btn-exit" data-exit-display>✕ Keluar (Esc)</button>
+    </div>
+  </section>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
+  <script src="/monitor.js"></script>
+  <script src="/prtg.js"></script>
+</body>
+</html>

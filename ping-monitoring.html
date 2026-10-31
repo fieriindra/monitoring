@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0a0e14">
+  <meta name="description" content="Ping Monitoring: pantau perangkat jaringan lewat SSH secara realtime, dengan kapasitas slot dan slide custom.">
+  <title>Ping Monitoring — Monitoring</title>
+  <link rel="stylesheet" href="/noc.css">
+</head>
+<body class="noc" data-module="ping">
+  <main class="noc-shell">
+    <header class="noc-top">
+      <a class="brand" href="/menu" aria-label="Monitoring">
+        <span class="brand-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M3 12h4l2.5-7 5 14 2.5-7h4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        Monitoring
+      </a>
+      <div class="user-tools">
+        <span>Halo, <strong data-username>...</strong></span>
+        <a class="btn" href="/ganti-password">Ganti Password</a>
+        <button class="btn" type="button" data-logout>Keluar</button>
+      </div>
+    </header>
+
+    <!-- MENU AKSI -->
+    <section class="noc-view" data-view="menu">
+      <a class="back-link" href="/menu">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M19 12H5m6 6-6-6 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Kembali ke pilihan monitoring
+      </a>
+      <p class="eyebrow">Monitoring jaringan</p>
+      <h1>Ping Monitoring</h1>
+      <p class="intro">Ping perangkat jaringan lewat SSH setiap detik. Riwayat tersimpan di MySQL dan tampil realtime; kapasitas slot & jeda slide bisa diatur di ATUR POSISI.</p>
+      <span class="counter" data-counter>memuat...</span>
+
+      <div class="action-grid">
+        <button class="action-card" type="button" id="btn-tampilkan" data-go="tampilkan">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="13" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M8 21h8M12 17v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>
+          <strong>TAMPILKAN</strong>
+          <span class="desc">Layar penuh berisi terminal ping realtime (multi-slide bergantian jika perlu). Tekan ESC untuk keluar.</span>
+        </button>
+        <button class="action-card" type="button" id="btn-tambah" data-go="tambah">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+          <strong>TAMBAH</strong>
+          <span class="desc">Daftarkan perangkat SSH baru (Huawei, Juniper, atau MikroTik).</span>
+        </button>
+        <button class="action-card" type="button" id="btn-atur" data-go="atur">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none"><path d="M5 9h14M5 15h14M9 5l-4 4 4 4M15 11l4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          <strong>ATUR POSISI</strong>
+          <span class="desc">Seret kartu untuk mengubah urutan slot per tujuan ping, atau hapus tujuan.</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- TAMBAH -->
+    <section class="noc-view" data-view="tambah" hidden>
+      <button class="back-link" type="button" data-go="menu">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M19 12H5m6 6-6-6 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Kembali ke menu aksi
+      </button>
+      <p class="eyebrow">Ping Monitoring</p>
+      <h1>Tambah Perangkat</h1>
+      <p class="intro">Password SSH disimpan terenkripsi di MySQL dan tidak pernah dikirim kembali ke browser.</p>
+
+      <form class="panel" id="add-form" autocomplete="off">
+        <div class="form-grid">
+          <div class="field">
+            <label for="f-label">Label</label>
+            <input id="f-label" name="label" maxlength="100" required placeholder="mis. Core Router Jakarta">
+          </div>
+          <div class="field">
+            <label for="f-type">Tipe perangkat</label>
+            <select id="f-type" name="device_type" required>
+              <option value="HUAWEI">Huawei</option>
+              <option value="JUNIPER">Juniper</option>
+              <option value="MIKROTIK">MikroTik</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="f-host">Host SSH (IP perangkat)</label>
+            <input id="f-host" name="host" maxlength="100" required placeholder="10.0.0.1" pattern="[A-Za-z0-9.:\-]+">
+          </div>
+          <div class="field">
+            <label for="f-port">Port SSH</label>
+            <input id="f-port" name="port" type="number" min="1" max="65535" value="22" required>
+          </div>
+          <div class="field">
+            <label for="f-user">Username SSH</label>
+            <input id="f-user" name="username" maxlength="100" required autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="f-pass">Password SSH</label>
+            <input id="f-pass" name="password" type="password" maxlength="128" autocomplete="new-password">
+            <small>Saat edit, kosongkan untuk tetap memakai password lama.</small>
+          </div>
+          <div class="field" id="f-src-wrap">
+            <label for="f-src">Src-address (khusus MikroTik)</label>
+            <input id="f-src" name="src_address" maxlength="100" placeholder="10.0.0.5" pattern="[A-Za-z0-9.:\-]+">
+            <small>Otomatis disisipkan sebagai <code>src-address=</code> di setiap perintah ping MikroTik. Kosongkan jika tidak perlu.</small>
+          </div>
+          <div class="field wide">
+            <label for="f-targets">Target IP yang di-ping (satu per baris, maks 6)</label>
+            <textarea id="f-targets" name="targets" maxlength="700" placeholder="8.8.8.8 | DNS Google&#10;1.1.1.1 | Cloudflare" spellcheck="false"></textarea>
+            <small>Tiap baris jadi kolom terpisah di layar TAMPILKAN. Bisa tulis <code>IP | Nama Kolom</code> (atau cukup <code>IP</code>, lalu ubah nama tiap kolom langsung di menu <strong>ATUR POSISI</strong>).</small>
+          </div>
+          <div class="field wide">
+            <label for="f-command">Ping command</label>
+            <textarea id="f-command" name="ping_command" maxlength="500" required spellcheck="false"></textarea>
+            <small>Preset otomatis mengikuti tipe perangkat. Anda boleh mengubahnya manual.</small>
+          </div>
+        </div>
+        <p class="form-error" data-form-error role="alert"></p>
+        <div class="form-actions">
+          <button class="btn primary" type="submit" id="btn-simpan">Simpan perangkat</button>
+          <button class="btn" type="button" id="reset-preset">Pakai preset vendor</button>
+          <button class="btn" type="button" data-go="menu">Batal</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- ATUR POSISI -->
+    <section class="noc-view" data-view="atur" hidden>
+      <button class="back-link" type="button" data-go="menu">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M19 12H5m6 6-6-6 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Kembali ke menu aksi
+      </button>
+      <p class="eyebrow">Ping Monitoring</p>
+      <h1>Atur Posisi</h1>
+      <p class="intro">Seret kartu ke posisi baru (atau pakai tombol ◀ ▶ / tombol panah keyboard), lalu simpan layout. Urutan atas ke bawah dulu, baru lanjut kolom berikutnya sesuai kapasitas slot.</p>
+      <div class="settings-bar">
+        <label>Kapasitas slot per slide
+          <select id="f-capacity">
+            <option value="2">2</option><option value="4">4</option><option value="6">6</option>
+            <option value="8">8</option><option value="10">10</option><option value="12" selected>12</option>
+            <option value="14">14</option><option value="16">16</option>
+          </select>
+        </label>
+        <label>Jeda putar slide (detik)
+          <input type="number" id="f-rotate" min="5" max="600" step="1" value="30">
+        </label>
+        <button class="btn" type="button" id="save-settings">Simpan Pengaturan</button>
+        <small>Lebih dari kapasitas = otomatis dibagi ke slide berikutnya, lalu berputar bergantian.</small>
+      </div>
+      <div class="arrange-grid" id="arrange-grid"></div>
+      <div class="form-actions">
+        <button class="btn primary" type="button" id="save-layout">Simpan Layout</button>
+        <button class="btn" type="button" data-go="menu">Kembali</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- TAMPILKAN: fullscreen hingga 4 kolom x 4 baris -->
+  <section class="display-view" data-view="tampilkan" hidden aria-label="Layar monitoring ping">
+    <div class="display-grid" id="display-grid"></div>
+    <div class="exit-bar">
+      <span class="conn" id="conn-state"><i></i>MENYAMBUNG</span>
+      <button class="btn" type="button" id="btn-exit" data-exit-display>✕ Keluar (Esc)</button>
+    </div>
+  </section>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
+  <script src="/monitor.js"></script>
+  <script src="/ping.js"></script>
+</body>
+</html>

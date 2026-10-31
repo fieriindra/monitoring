@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0a0e14">
+  <title>Pilih Monitoring — Monitoring</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <a class="brand" href="/menu" aria-label="Monitoring">
+        <span class="brand-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M3 12h4l2.5-7 5 14 2.5-7h4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        Monitoring
+      </a>
+      <div class="user-tools">
+        <span>Halo, <strong data-username>...</strong></span>
+        <a class="logout" href="/ganti-password">Ganti Password</a>
+        <button class="logout" type="button" data-logout>Keluar</button>
+      </div>
+    </header>
+
+    <section class="content">
+      <p class="eyebrow">Dashboard</p>
+      <h1>Pilih monitoring</h1>
+      <p class="intro">Pilih layanan yang ingin Anda pantau. Kedua menu menggunakan akun dan database Monitoring yang sama.</p>
+
+      <div class="module-grid">
+        <a class="module-card" href="/ping-monitoring">
+          <span class="module-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M3 12h4l2.5-7 5 14 2.5-7h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <h2>Ping Monitoring</h2>
+          <p>Pantau ketersediaan host dan waktu respons koneksi jaringan.</p>
+          <span class="card-link">Buka Ping Monitoring
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+        </a>
+
+        <a class="module-card" href="/prtg-monitoring">
+          <span class="module-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><rect x="4" y="4" width="16" height="16" rx="3" stroke="currentColor" stroke-width="1.8"/><path d="M8 15v-3m4 3V8m4 7v-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </span>
+          <h2>PRTG Monitoring</h2>
+          <p>Lihat status sensor, perangkat, dan ringkasan monitoring PRTG.</p>
+          <span class="card-link">Buka PRTG Monitoring
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+        </a>
+      </div>
+      <p class="footer">Akses khusus untuk pengguna terotorisasi</p>
+      <p class="footer" data-message role="status" aria-live="polite"></p>
+    </section>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>
