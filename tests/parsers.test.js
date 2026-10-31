@@ -112,3 +112,60 @@ test("MikroTik UP dan timeout tidak berubah", () => {
   assert.deepEqual(parsePing("0 8.8.8.8 56 117 3ms381us"), { status: "UP", latency: 3.381 });
   assert.deepEqual(parsePing("0 8.8.8.8 timeout"), { status: "TIMEOUT", latency: null });
 });
+
+const MT_PARTIAL = `  SEQ HOST                                     SIZE TTL TIME       STATUS
+    0 8.8.8.8                                  56  117 2ms
+    1 8.8.8.8                                                       timeout
+    2 8.8.8.8                                  56  117 4ms
+    sent=3 received=2 packet-loss=33% min-rtt=2ms avg-rtt=3ms max-rtt=4ms`;
+
+const MT_RTO = `  SEQ HOST                                     SIZE TTL TIME       STATUS
+    0 8.8.8.8                                                       timeout
+    1 8.8.8.8                                                       timeout
+    2 8.8.8.8                                                       timeout
+    sent=3 received=0 packet-loss=100% min-rtt=0ms avg-rtt=0ms max-rtt=0ms`;
+
+test("MikroTik loss parsial tetap UP, latency dari avg-rtt ringkasan (bukan baris pertama / bukan TIMEOUT)", () => {
+  assert.deepEqual(parsePing(MT_PARTIAL), { status: "UP", latency: 3 });
+  assert.equal(summarize(MT_PARTIAL, "8.8.8.8"), "0 8.8.8.8 56 117 2ms");
+});
+
+test("MikroTik RTO penuh: received=0 / packet-loss=100% -> TIMEOUT dan tampilan konsisten", () => {
+  assert.deepEqual(parsePing(MT_RTO), { status: "TIMEOUT", latency: null });
+  assert.equal(summarize(MT_RTO, "8.8.8.8"), "0 8.8.8.8 timeout");
+});
+
+test("MikroTik latency memakai avg-rtt, bukan waktu baris pertama", () => {
+  const output = "0 8.8.8.8 56 117 10ms\n1 8.8.8.8 56 117 2ms\nsent=2 received=2 packet-loss=0% min-rtt=2ms avg-rtt=6ms max-rtt=10ms";
+  assert.deepEqual(parsePing(output), { status: "UP", latency: 6 });
+});
+
+test("MikroTik RTT di bawah 1 ms (satuan us) terbaca dari avg-rtt", () => {
+  const output = "0 192.168.192.252 56 64 407us\n1 192.168.192.252 56 64 452us\nsent=2 received=2 packet-loss=0% min-rtt=407us avg-rtt=436us max-rtt=452us";
+  assert.deepEqual(parsePing(output), { status: "UP", latency: 0.436 });
+});
+
+test("MikroTik output terpotong tanpa ringkasan: baris berbalas tetap UP walau ada baris timeout", () => {
+  const output = "0 8.8.8.8 56 117 5ms\n1 8.8.8.8 timeout";
+  assert.deepEqual(parsePing(output), { status: "UP", latency: 5 });
+});
+
+test("Juniper loss parsial: statistik received>0 -> UP dengan rata-rata round-trip", () => {
+  const juniper = `
+PING 10.0.0.5 (10.0.0.5): 56 data bytes
+64 bytes from 10.0.0.5: icmp_seq=0 ttl=64 time=1.5 ms
+64 bytes from 10.0.0.5: icmp_seq=2 ttl=64 time=2.5 ms
+--- 10.0.0.5 ping statistics ---
+3 packets transmitted, 2 packets received, 33% packet loss
+round-trip min/avg/max/stddev = 1.5/2.0/2.5/0.5 ms`;
+  assert.deepEqual(parsePing(juniper), { status: "UP", latency: 2 });
+});
+
+test("Juniper RTO penuh tanpa baris round-trip -> TIMEOUT", () => {
+  const juniper = `
+PING 10.0.0.5 (10.0.0.5): 56 data bytes
+--- 10.0.0.5 ping statistics ---
+3 packets transmitted, 0 packets received, 100% packet loss`;
+  assert.deepEqual(parsePing(juniper), { status: "TIMEOUT", latency: null });
+  assert.equal(summarize(juniper, "10.0.0.5"), "0 10.0.0.5 timeout");
+});

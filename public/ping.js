@@ -9,8 +9,15 @@
     // dan latency diambil dari rata-rata statistik akhir perangkat.
     // Catatan: di VRP, -m adalah jeda ANTAR paket, bukan timeout balasan.
     HUAWEI: "ping -c 3 -m 200 -t 1000 <IP>",
-    JUNIPER: "ping count 1 wait 1 <IP>",
-    MIKROTIK: "/ping count=1 interval=1s <IP>"
+    // Sama seperti Huawei: 3 paket agar satu paket hilang sesaat tidak langsung
+    // terbaca RTO, dan latency diambil dari rata-rata statistik akhir.
+    // Juniper: "wait" adalah jeda tunggu SETELAH paket terakhir terkirim
+    // (default 10 detik), jadi diisi 1; total run +/- 3 detik.
+    JUNIPER: "ping count 3 interval 1 wait 1 <IP>",
+    // MikroTik: di RouterOS, interval sekaligus menjadi jendela timeout tiap
+    // paket — interval 1 detik memberi ruang untuk target dengan RTT besar,
+    // dan 3 paket selesai dalam +/- 3 detik.
+    MIKROTIK: "/ping count=3 interval=1s <IP>"
   };
   const MAX_TARGETS_PER_DEVICE = 6;
   const MAX_LINES = 60;
