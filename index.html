@@ -86,7 +86,8 @@
         credentials: "same-origin",
         body: JSON.stringify({
           username: loginForm.elements.username.value,
-          password: passwordInput.value
+          password: passwordInput.value,
+          remember: loginForm.elements.remember.checked
         })
       })
         .then(async (response) => {

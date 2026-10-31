@@ -51,7 +51,7 @@ Halaman setelah login hanya disajikan melalui rute backend yang memeriksa sesi. 
    npm.cmd start
    ```
 
-Buka `http://localhost:3000`. Login akan membuka menu pilihan. Endpoint `/api/me` memeriksa sesi login yang ditandatangani server. Sesi tersimpan di cookie `HttpOnly` dan **tidak memiliki masa kedaluwarsa** — sesi hanya berakhir saat pengguna logout manual. Cookie diatur ke batas persisten maksimum browser (400 hari) dan diperbarui pada setiap request terautentikasi, jadi sesi tidak terputus selama aplikasi dipakai. Catatan: token sesi lama (format sebelum perubahan ini) tidak berlaku lagi, pengguna cukup login sekali lagi.
+Buka `http://localhost:3000`. Login akan membuka menu pilihan. Endpoint `/api/me` memeriksa sesi login yang ditandatangani server. Sesi tersimpan di cookie `HttpOnly`. Umurnya ditentukan checkbox **Ingat saya** di halaman login: bila dicentang, sesi **tidak memiliki masa kedaluwarsa** — cookie persisten diatur ke batas maksimum browser (400 hari) dan diperbarui pada setiap request terautentikasi, jadi sesi hanya berakhir saat pengguna logout manual; bila tidak dicentang, cookie adalah cookie sesi biasa yang terhapus begitu browser ditutup. Pilihan tersebut tersimpan sebagai penanda di dalam token sesi. Catatan: token sesi dari sebelum fitur "Ingat saya" tetap berlaku dan diperlakukan sebagai sesi "Ingat saya".
 
 ## Modul Ping dan PRTG
 
