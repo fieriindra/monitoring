@@ -471,10 +471,13 @@
     refreshButton.addEventListener("click", loadAll);
 
     loadAll();
-    // Segarkan daftar secara berkala selama halaman menu Ping Monitoring terbuka.
+    // Masuk ke tampilan Log Timeout selalu menampilkan data terbaru.
+    const logCard = document.getElementById("btn-logtimeout");
+    if (logCard) logCard.addEventListener("click", () => loadLogs().catch(() => {}));
+    // Segarkan daftar secara berkala selama tampilan Log Timeout terbuka.
     setInterval(() => {
-      const menuView = document.querySelector('[data-view="menu"]');
-      if (menuView && !menuView.hidden) loadLogs().catch(() => {});
+      const logView = document.querySelector('[data-view="logtimeout"]');
+      if (logView && !logView.hidden) loadLogs().catch(() => {});
     }, 15000);
   }
 

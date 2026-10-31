@@ -3,7 +3,7 @@
 (function () {
   "use strict";
 
-  const VIEWS = ["menu", "tambah", "atur", "tampilkan"];
+  const VIEWS = ["menu", "tambah", "atur", "tampilkan", "logtimeout"];
   const moduleName = document.body.dataset.module;
   const views = Array.from(document.querySelectorAll("[data-view]"));
   const toastElement = document.getElementById("toast");
