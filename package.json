@@ -6,6 +6,7 @@
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
+    "test": "node --test --test-force-exit \"tests/*.test.js\"",
     "db:init": "node scripts/init-db.js",
     "db:seed": "node scripts/seed-user.js",
     "db:backup": "node scripts/backup-db.js",

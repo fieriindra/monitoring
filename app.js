@@ -17,7 +17,12 @@ const app = express();
 const port = Number(process.env.PORT || 3000);
 const sessionSecret = process.env.SESSION_SECRET;
 const cookieName = "nadi_session";
-const sessionDurationSeconds = 8 * 60 * 60;
+// Sesi TIDAK memiliki masa kedaluwarsa: pengguna hanya keluar saat logout manual.
+// Token sesi tidak membawa waktu berakhir, dan Max-Age cookie diatur ke batas
+// persisten maksimum browser (400 hari, batas Chrome/RFC 6265bis) lalu diperbarui
+// secara geser (sliding) pada setiap request terautentikasi, sehingga selama
+// aplikasi dipakai sesi tidak pernah mencapai batas tersebut.
+const sessionCookieMaxAgeSeconds = 400 * 24 * 60 * 60;
 const databaseConfigurationError = "MySQL belum dikonfigurasi. Isi MYSQL_USER dan MYSQL_PASSWORD di file .env.";
 const sessionConfigurationError = "SESSION_SECRET belum dikonfigurasi. Isi secret minimal 32 karakter di file .env.";
 
@@ -25,8 +30,8 @@ app.disable("x-powered-by");
 app.use(express.json({ limit: "10kb" }));
 app.use(express.static(path.join(__dirname, "public"), { index: false }));
 
-function signSession(userId, expiresAt) {
-  const payload = `${userId}.${expiresAt}`;
+function signSession(userId) {
+  const payload = `${userId}`;
   const signature = crypto.createHmac("sha256", sessionSecret).update(payload).digest("base64url");
   return `${payload}.${signature}`;
 }
@@ -34,15 +39,14 @@ function signSession(userId, expiresAt) {
 function verifySession(token) {
   if (typeof token !== "string" || !sessionSecret || sessionSecret.length < 32) return null;
 
-  const [userIdText, expiresAtText, signature, ...extra] = token.split(".");
-  if (extra.length || !/^\d+$/.test(userIdText) || !/^\d+$/.test(expiresAtText) || !signature) return null;
+  const [userIdText, signature, ...extra] = token.split(".");
+  if (extra.length || !/^\d+$/.test(userIdText) || !signature) return null;
 
   const userId = Number(userIdText);
-  const expiresAt = Number(expiresAtText);
-  if (!Number.isSafeInteger(userId) || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) return null;
+  if (!Number.isSafeInteger(userId)) return null;
 
   const expected = crypto.createHmac("sha256", sessionSecret)
-    .update(`${userId}.${expiresAt}`)
+    .update(`${userId}`)
     .digest();
   let received;
   try {
@@ -52,6 +56,16 @@ function verifySession(token) {
   }
   if (received.length !== expected.length || !crypto.timingSafeEqual(received, expected)) return null;
   return userId;
+}
+
+// Tulis (atau perbarui) cookie sesi. Dipanggil saat login dan pada setiap
+// request terautentikasi agar Max-Age cookie selalu mulai dari awal.
+function setSessionCookie(response, userId) {
+  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  response.setHeader(
+    "Set-Cookie",
+    `${cookieName}=${encodeURIComponent(signSession(userId))}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${sessionCookieMaxAgeSeconds}${secure}`
+  );
 }
 
 function readCookie(request, name) {
@@ -88,6 +102,7 @@ async function requirePageSession(request, response, next) {
   try {
     const user = await getSessionUser(request);
     if (!user) return response.redirect("/");
+    setSessionCookie(response, user.id);
     response.locals.username = user.username;
     return next();
   } catch (error) {
@@ -98,7 +113,8 @@ async function requirePageSession(request, response, next) {
 async function requireApiSession(request, response, next) {
   try {
     const user = await getSessionUser(request);
-    if (!user) return response.status(401).json({ error: "Sesi tidak valid atau telah berakhir." });
+    if (!user) return response.status(401).json({ error: "Sesi tidak valid." });
+    setSessionCookie(response, user.id);
     request.user = user;
     return next();
   } catch (error) {
@@ -173,13 +189,7 @@ app.post("/api/login", async (request, response, next) => {
       return response.status(401).json({ error: "Username atau kata sandi salah." });
     }
 
-    const expiresAt = Date.now() + sessionDurationSeconds * 1000;
-    const cookieValue = signSession(user.id, expiresAt);
-    const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
-    response.setHeader(
-      "Set-Cookie",
-      `${cookieName}=${encodeURIComponent(cookieValue)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${sessionDurationSeconds}${secure}`
-    );
+    setSessionCookie(response, user.id);
     return response.json({ username: user.username, redirect: "/menu" });
   } catch (error) {
     return next(error);
@@ -189,7 +199,8 @@ app.post("/api/login", async (request, response, next) => {
 app.get("/api/me", async (request, response, next) => {
   try {
     const user = await getSessionUser(request);
-    if (!user) return response.status(401).json({ error: "Sesi tidak valid atau telah berakhir." });
+    if (!user) return response.status(401).json({ error: "Sesi tidak valid." });
+    setSessionCookie(response, user.id);
     return response.json({ username: user.username });
   } catch (error) {
     return next(error);

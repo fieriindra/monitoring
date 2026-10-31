@@ -6,9 +6,27 @@ const { parsePing, summarize } = require("../lib/parsers");
 const INTERVAL_MS = 1000;
 const CONNECT_TIMEOUT_MS = 8000;
 const COMMAND_TIMEOUT_MS = 6000;
+// Shell Huawei diberi waktu lebih longgar: ping multi-paket ke target RTO butuh
+// (jumlah paket x timeout balasan perangkat) untuk selesai secara sah — contoh
+// 5 paket x 2000 ms (timeout default VRP) + interval antar paket sudah > 6 detik.
+// Memotongnya di 6 detik membuat RTO yang sah dibuang dan dicatat sebagai error SSH.
+const HUAWEI_COMMAND_TIMEOUT_MS = 20000;
 const MAX_OUTPUT_CHARS = 4000;
 const CLEANUP_BATCH = 10000;
 const HUAWEI_PROMPT_RE = /(?:<[^>\r\n]+>|\[[^\]\r\n]+\])\s*$/;
+const HUAWEI_PROMPT_ANYWHERE_RE = /(?:<[^>\r\n]+>|\[[^\]\r\n]+\])/;
+
+// Output ping sudah bisa diputuskan hasilnya (bukan kegagalan SSH) bila memuat
+// statistik akhir, baris "Request time out", atau setidaknya satu balasan.
+// Dipakai saat batas waktu shell tercapai: hasil seperti ini dikembalikan apa
+// adanya untuk diparse, bukan dibuang/diulang sebagai error SSH — pengulangan
+// dan penandaan "gagal" akan menyebarkan TIMEOUT palsu ke target lain.
+function hasConclusivePingOutput(output) {
+  return /packet loss/i.test(output)
+    || /request time out/i.test(output)
+    || /reply from\s+\S+.*\btime\s*[=<]/i.test(output)
+    || /\d+\s+packets?(?:\(s\))?\s+received/i.test(output);
+}
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -107,11 +125,26 @@ function runShellCommand(stream, command) {
       if (err) reject(err);
       else resolve(res);
     };
-    const timer = setTimeout(() => finish(new Error("perintah shell melebihi batas waktu")), COMMAND_TIMEOUT_MS);
+    const timer = setTimeout(() => {
+      // Batas waktu tercapai: bila output yang terkumpul sudah konklusif (target
+      // memang RTO atau ada balasan), itu hasil ping yang sah — kembalikan untuk
+      // diparse. Hanya output yang tidak bisa diputuskan yang dianggap gagal.
+      if (hasConclusivePingOutput(output)) return finish(null, output);
+      return finish(new Error("perintah shell melebihi batas waktu"));
+    }, HUAWEI_COMMAND_TIMEOUT_MS);
     const onData = (chunk) => {
       if (output.length < MAX_OUTPUT_CHARS) output += chunk.toString("utf8");
-      // Selesai ketika statistik ping sudah keluar dan prompt CLI (<...>) muncul kembali.
-      if ((/packet loss/i.test(output) || /Error:|Unrecognized|Wrong parameter/i.test(output)) && HUAWEI_PROMPT_RE.test(output)) {
+      // Selesai ketika statistik ping sudah keluar dan prompt CLI (<...>) muncul
+      // kembali SETELAH statistik itu. Prompt tidak harus berada tepat di ujung
+      // buffer: potongan data SSH bisa menyertakan baris kosong/banner setelahnya,
+      // dan menunggu prompt persis di ujung membuat perintah yang sebenarnya
+      // sudah selesai menggantung sampai batas waktu.
+      const statsIndex = output.search(/packet loss/i);
+      if (statsIndex >= 0 && HUAWEI_PROMPT_ANYWHERE_RE.test(output.slice(statsIndex))) {
+        finish(null, output);
+        return;
+      }
+      if ((/Error:|Unrecognized|Wrong parameter/i.test(output)) && HUAWEI_PROMPT_RE.test(output)) {
         finish(null, output);
       }
     };

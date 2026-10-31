@@ -3,7 +3,12 @@
   "use strict";
 
   const PRESETS = {
-    HUAWEI: "ping -c 1 -m 1000 <IP>",
+    // 3 paket, jeda kirim 200 ms, timeout tunggu balasan 1000 ms per paket (-t).
+    // Satu paket saja (-c 1) terlalu mudah berayun: satu balasan hilang sesaat
+    // langsung terbaca RTO. Dengan 3 paket, RTO hanya bila ketiganya tak berbalas,
+    // dan latency diambil dari rata-rata statistik akhir perangkat.
+    // Catatan: di VRP, -m adalah jeda ANTAR paket, bukan timeout balasan.
+    HUAWEI: "ping -c 3 -m 200 -t 1000 <IP>",
     JUNIPER: "ping count 1 wait 1 <IP>",
     MIKROTIK: "/ping count=1 interval=1s <IP>"
   };
