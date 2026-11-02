@@ -319,6 +319,35 @@ function createPingRouter({ pool, requireApiSession, worker }) {
       if (!logs.length) return response.status(404).json({ error: "Log timeout tidak ditemukan." });
       const log = logs[0];
 
+      // Jalur cepat: snapshot detail yang disimpan worker ke
+      // ping_timeout_log_details saat kejadian pulih — satu query terindeks
+      // berdasarkan log_id, tanpa memindai ping_logs sama sekali. Kejadian
+      // tanpa snapshot (masih berlangsung, tercatat sebelum fitur snapshot
+      // ada, atau snapshot-nya gagal dibuat) memakai pemindaian jendela
+      // ping_logs di bawah, persis seperti sebelumnya.
+      try {
+        const [snapRows] = await pool.query(
+          "SELECT created_ts, status, latency, line FROM ping_timeout_log_details WHERE log_id = ? ORDER BY id ASC",
+          [id]
+        );
+        if (snapRows.length) {
+          const totalEntries = Math.max(snapRows.length, Number(log.timeout_count) || 0);
+          return response.json({
+            log: { ...log, state: log.recovered_at ? "recovered" : "ongoing" },
+            total_entries: totalEntries,
+            truncated: totalEntries > snapRows.length,
+            entries: snapRows.map((row) => ({
+              created_at: new Date(Number(row.created_ts) * 1000).toISOString(),
+              status: row.status,
+              latency: row.latency,
+              line: row.line
+            }))
+          });
+        }
+      } catch (error) {
+        if (error.code !== "ER_NO_SUCH_TABLE") throw error;
+      }
+
       // Jendela dibandingkan sebagai epoch (UNIX_TIMESTAMP) agar tetap benar
       // walau zona waktu MySQL dan zona waktu proses Node berbeda: started_at
       // tersimpan sebagai DATETIME waktu lokal Node, sedangkan created_at

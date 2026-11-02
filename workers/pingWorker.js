@@ -20,6 +20,9 @@ const CLEANUP_BATCH = 10000;
 // jadi perubahan dari halaman Ping Monitoring berlaku tanpa restart.
 const DEFAULT_TIMEOUT_THRESHOLD_SECONDS = 3;
 const TIMEOUT_SETTINGS_REFRESH_MS = 10000;
+// Snapshot detail kejadian: maksimal baris TIMEOUT yang disimpan per kejadian
+// (sama dengan batas tampil endpoint detail di routes/ping.js).
+const TIMEOUT_DETAIL_MAX_ENTRIES = 3600;
 const HUAWEI_PROMPT_RE = /(?:<[^>\r\n]+>|\[[^\]\r\n]+\])\s*$/;
 const HUAWEI_PROMPT_ANYWHERE_RE = /(?:<[^>\r\n]+>|\[[^\]\r\n]+\])/;
 
@@ -319,6 +322,11 @@ class PingWorker extends EventEmitter {
     }
     if (this.halted || this.cleanupTimer) return;
     const retentionDays = Math.max(1, Number(process.env.PING_LOG_RETENTION_DAYS || 7));
+    // Backfill snapshot detail kejadian lama di latar belakang; kegagalan
+    // atau ketiadaannya tidak menghalangi start (endpoint memakai jalur
+    // pemindaian lama untuk kejadian tanpa snapshot).
+    this.backfillTimeoutDetailSnapshots(retentionDays).catch((error) =>
+      console.error("Backfill snapshot detail gagal:", error.code || error.message));
     // Bersihkan sekali saat start agar log kedaluwarsa langsung hilang setelah
     // deploy/restart, lalu ulangi setiap jam.
     this.cleanup(retentionDays).catch((error) => console.error("Pembersihan log gagal:", error.code || error.message));
@@ -368,6 +376,24 @@ class PingWorker extends EventEmitter {
         KEY idx_ping_timeout_logs_device (device_id, created_at),
         CONSTRAINT fk_ping_timeout_logs_device FOREIGN KEY (device_id)
           REFERENCES ping_devices (id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+    );
+    // Snapshot baris-baris detail per kejadian, diisi worker saat kejadian
+    // pulih. Endpoint detail membaca tabel kecil terindeks ini — bukan lagi
+    // memindai ping_logs pada jendela waktu setiap detail dibuka. Baris
+    // snapshot ikut terhapus otomatis (FK CASCADE) saat baris log induknya
+    // dihapus retensi/perangkat.
+    await this.pool.query(
+      `CREATE TABLE IF NOT EXISTS ping_timeout_log_details (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        log_id BIGINT UNSIGNED NOT NULL,
+        created_ts INT UNSIGNED NOT NULL,
+        status VARCHAR(10) NOT NULL DEFAULT 'TIMEOUT',
+        latency FLOAT NULL,
+        line VARCHAR(512) NOT NULL,
+        KEY idx_ping_timeout_log_details_log (log_id, id),
+        CONSTRAINT fk_ping_timeout_log_details_log FOREIGN KEY (log_id)
+          REFERENCES ping_timeout_logs (id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
     );
   }
@@ -499,7 +525,92 @@ class PingWorker extends EventEmitter {
       );
     } catch (error) {
       console.error("Gagal melengkapi log timeout:", error.code || error.message);
+      return;
     }
+    // Simpan snapshot baris detail selagi baris-barisnya masih ada di
+    // ping_logs, agar detail kejadian ini selanjutnya dibaca dari tabel
+    // snapshot yang kecil. Kegagalan di sini tidak membatalkan pemulihan
+    // yang sudah tercatat — endpoint detail akan memakai jalur pemindaian
+    // ping_logs seperti sebelumnya.
+    try {
+      await this.snapshotTimeoutDetail(logId, {
+        deviceId: device.id,
+        target,
+        host: device.host,
+        startedAt: event.startedAt,
+        endedAt: event.endedAt
+      });
+    } catch (error) {
+      console.error("Gagal menyimpan snapshot detail timeout:", error.code || error.message);
+    }
+  }
+
+  // Salin baris-baris hasil ping TIMEOUT selama jendela kejadian dari
+  // ping_logs ke ping_timeout_log_details, dengan teks baris yang sudah
+  // diringkas (summarize) siap tampil. Idempoten: snapshot lama untuk
+  // kejadian yang sama diganti. Jendela dibandingkan sebagai epoch —
+  // alasan yang sama seperti endpoint detail (zona waktu MySQL vs Node).
+  async snapshotTimeoutDetail(logId, { deviceId, target, host, startedAt, endedAt }) {
+    const startEpoch = Math.floor(startedAt / 1000);
+    const endEpoch = Math.floor(endedAt / 1000);
+    const targetCondition = target === null ? "target IS NULL" : "target = ?";
+    const windowParams = target === null ? [deviceId] : [deviceId, target];
+    const [rows] = await this.pool.query(
+      `SELECT UNIX_TIMESTAMP(created_at) AS created_ts, status, latency, raw_output
+       FROM ping_logs
+       WHERE device_id = ? AND ${targetCondition} AND status = 'TIMEOUT'
+         AND UNIX_TIMESTAMP(created_at) >= ? AND UNIX_TIMESTAMP(created_at) <= ?
+       ORDER BY created_at ASC, id ASC LIMIT ?`,
+      [...windowParams, startEpoch, endEpoch, TIMEOUT_DETAIL_MAX_ENTRIES]
+    );
+    await this.pool.execute("DELETE FROM ping_timeout_log_details WHERE log_id = ?", [logId]);
+    if (!rows.length) return 0;
+    const values = rows.map((row) => [
+      logId,
+      Number(row.created_ts),
+      row.status,
+      row.latency,
+      summarize(row.raw_output, target || host)
+    ]);
+    await this.pool.query(
+      "INSERT INTO ping_timeout_log_details (log_id, created_ts, status, latency, line) VALUES ?",
+      [values]
+    );
+    return rows.length;
+  }
+
+  // Isi snapshot untuk kejadian lama yang sudah pulih tetapi belum punya
+  // snapshot (tercatat sebelum fitur snapshot ada), agar detailnya ikut
+  // cepat. Berjalan sekali saat start, dibatasi pada kejadian terbaru di
+  // dalam masa retensi (di luar itu baris ping_logs-nya memang sudah
+  // terhapus) dan jumlahnya dibatasi agar start tidak berat.
+  async backfillTimeoutDetailSnapshots(retentionDays, limit = 100) {
+    const [logs] = await this.pool.query(
+      `SELECT l.id, l.device_id, l.target, l.started_at, l.recovered_at, d.host AS device_host
+       FROM ping_timeout_logs l
+       JOIN ping_devices d ON d.id = l.device_id
+       WHERE l.recovered_at IS NOT NULL
+         AND l.started_at >= NOW() - INTERVAL ? DAY
+         AND NOT EXISTS (SELECT 1 FROM ping_timeout_log_details s WHERE s.log_id = l.id)
+       ORDER BY l.id DESC LIMIT ?`,
+      [retentionDays, limit]
+    );
+    let filled = 0;
+    for (const log of logs) {
+      try {
+        const copied = await this.snapshotTimeoutDetail(log.id, {
+          deviceId: log.device_id,
+          target: log.target,
+          host: log.device_host,
+          startedAt: new Date(log.started_at).getTime(),
+          endedAt: new Date(log.recovered_at).getTime()
+        });
+        if (copied > 0) filled += 1;
+      } catch (error) {
+        console.error(`Gagal backfill snapshot detail #${log.id}:`, error.code || error.message);
+      }
+    }
+    if (filled) console.log(`Snapshot detail log timeout terisi untuk ${filled} kejadian lama.`);
   }
 
   // Retensi log: ping_logs dan ping_timeout_logs hanya disimpan selama

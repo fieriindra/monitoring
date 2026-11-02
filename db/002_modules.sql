@@ -105,3 +105,22 @@ CREATE TABLE IF NOT EXISTS ping_timeout_logs (
   CONSTRAINT fk_ping_timeout_logs_device FOREIGN KEY (device_id)
     REFERENCES ping_devices (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Snapshot baris-baris detail per kejadian (satu baris per hasil ping TIMEOUT
+-- selama kejadian, teks baris sudah diringkas siap tampil). Diisi worker saat
+-- kejadian pulih — dan untuk kejadian lama lewat backfill saat start — supaya
+-- endpoint detail membaca tabel kecil terindeks ini, bukan memindai ping_logs
+-- pada jendela waktu setiap kali detail dibuka. Ikut terhapus otomatis lewat
+-- FK CASCADE saat baris log induknya dihapus (retensi/perangkat). Tabel ini
+-- juga dibuat otomatis oleh worker saat start.
+CREATE TABLE IF NOT EXISTS ping_timeout_log_details (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  log_id BIGINT UNSIGNED NOT NULL,
+  created_ts INT UNSIGNED NOT NULL, -- epoch detik waktu hasil ping
+  status VARCHAR(10) NOT NULL DEFAULT 'TIMEOUT',
+  latency FLOAT NULL,
+  line VARCHAR(512) NOT NULL,
+  KEY idx_ping_timeout_log_details_log (log_id, id),
+  CONSTRAINT fk_ping_timeout_log_details_log FOREIGN KEY (log_id)
+    REFERENCES ping_timeout_logs (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

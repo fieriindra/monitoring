@@ -307,6 +307,12 @@
     const refreshButton = document.getElementById("refresh-timeout-log");
     let settingsLoaded = false;
     let expandedId = null;
+    // Cache detail kejadian yang SUDAH PULIH: isinya tidak akan berubah,
+    // jadi membuka ulang / menggambar ulang tidak perlu memuat dari API lagi.
+    const detailCache = new Map();
+    // Tanda tangan daftar terakhir yang digambar; dipakai penyegaran berkala
+    // untuk melewati penggambaran ulang bila tidak ada yang berubah.
+    let lastSignature = "";
 
     function cell(text, sub) {
       const td = document.createElement("td");
@@ -339,7 +345,7 @@
         tr.title = "Klik untuk melihat detail timeout per baris";
         tr.addEventListener("click", () => {
           expandedId = expandedId === row.id ? null : row.id;
-          loadLogs().catch((error) => Monitor.toast(error.message, "err"));
+          loadLogs(true).catch((error) => Monitor.toast(error.message, "err"));
         });
         const startCell = cell(formatDateTime(row.started_at));
         const caret = document.createElement("span");
@@ -386,48 +392,70 @@
       }
     }
 
+    // Gambar isi detail dari data yang sudah ada (hasil API atau cache).
+    function renderDetail(detailCell, logRow, data) {
+      detailCell.replaceChildren();
+      const head = document.createElement("div");
+      head.className = "log-detail-head";
+      const durationText = logRow.state === "ongoing"
+        ? `durasi berjalan ${formatDuration((Date.now() - new Date(logRow.started_at).getTime()) / 1000)}`
+        : `durasi total ${formatDuration(logRow.duration_seconds)}`;
+      head.textContent = `Detail kejadian #${logRow.id}: ${data.total_entries} baris hasil timeout (${durationText})`
+        + (data.truncated ? ` — hanya ${data.entries.length} baris pertama yang ditampilkan` : "");
+      detailCell.appendChild(head);
+
+      if (!data.entries.length) {
+        const empty = document.createElement("div");
+        empty.className = "log-empty";
+        empty.textContent = "Tidak ada baris hasil ping pada jendela kejadian ini (riwayat ping_logs mungkin sudah terhapus oleh retensi).";
+        detailCell.appendChild(empty);
+        return;
+      }
+      const lines = document.createElement("div");
+      lines.className = "log-lines";
+      for (const entry of data.entries) {
+        const line = document.createElement("div");
+        line.className = "log-line";
+        const time = document.createElement("span");
+        time.className = "t";
+        time.textContent = `[${clock(entry.created_at)}]`;
+        line.append(time, document.createTextNode(entry.line));
+        lines.appendChild(line);
+      }
+      detailCell.appendChild(lines);
+    }
+
     // Isi baris detail sebuah kejadian: satu baris per hasil ping TIMEOUT
-    // selama kejadian berlangsung (kejadian 10 detik ≈ 10 baris).
+    // selama kejadian berlangsung (kejadian 10 detik ≈ 10 baris). Kejadian
+    // yang sudah pulih dilayani dari cache setelah pemuatan pertama.
     async function fillDetail(detailCell, logRow) {
+      const cached = logRow.state === "recovered" ? detailCache.get(logRow.id) : null;
+      if (cached) {
+        renderDetail(detailCell, logRow, cached);
+        return;
+      }
       try {
         const data = await Monitor.api(`/api/ping/timeout-logs/${logRow.id}/detail`);
-        detailCell.replaceChildren();
-        const head = document.createElement("div");
-        head.className = "log-detail-head";
-        const durationText = logRow.state === "ongoing"
-          ? `durasi berjalan ${formatDuration((Date.now() - new Date(logRow.started_at).getTime()) / 1000)}`
-          : `durasi total ${formatDuration(logRow.duration_seconds)}`;
-        head.textContent = `Detail kejadian #${logRow.id}: ${data.total_entries} baris hasil timeout (${durationText})`
-          + (data.truncated ? ` — hanya ${data.entries.length} baris pertama yang ditampilkan` : "");
-        detailCell.appendChild(head);
-
-        if (!data.entries.length) {
-          const empty = document.createElement("div");
-          empty.className = "log-empty";
-          empty.textContent = "Tidak ada baris hasil ping pada jendela kejadian ini (riwayat ping_logs mungkin sudah terhapus oleh retensi).";
-          detailCell.appendChild(empty);
-          return;
-        }
-        const lines = document.createElement("div");
-        lines.className = "log-lines";
-        for (const entry of data.entries) {
-          const line = document.createElement("div");
-          line.className = "log-line";
-          const time = document.createElement("span");
-          time.className = "t";
-          time.textContent = `[${clock(entry.created_at)}]`;
-          line.append(time, document.createTextNode(entry.line));
-          lines.appendChild(line);
-        }
-        detailCell.appendChild(lines);
+        if (logRow.state === "recovered") detailCache.set(logRow.id, data);
+        renderDetail(detailCell, logRow, data);
       } catch (error) {
         detailCell.textContent = `Detail gagal dimuat: ${error.message}`;
       }
     }
 
-    async function loadLogs() {
+    function rowsSignature(rows) {
+      return rows.map((row) => [row.id, row.state, row.timeout_count, row.recovered_at || "", row.duration_seconds ?? ""].join(":")).join("|");
+    }
+
+    async function loadLogs(force = false) {
       const rows = await Monitor.api("/api/ping/timeout-logs?limit=50");
-      renderRows(Array.isArray(rows) ? rows : []);
+      const list = Array.isArray(rows) ? rows : [];
+      const signature = rowsSignature(list);
+      // Penyegaran berkala tidak menggambar ulang — dan tidak memuat ulang
+      // detail yang sedang dibaca — bila tidak ada kejadian yang berubah.
+      if (!force && expandedId != null && signature === lastSignature) return;
+      lastSignature = signature;
+      renderRows(list);
     }
 
     async function loadSettings() {
@@ -441,7 +469,7 @@
     async function loadAll() {
       try {
         if (!settingsLoaded) await loadSettings();
-        await loadLogs();
+        await loadLogs(true);
       } catch (error) {
         Monitor.toast(error.message, "err");
       }
