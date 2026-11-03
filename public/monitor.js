@@ -14,9 +14,13 @@
   let enteredFullscreen = false;
   let toastTimer = null;
   let editingId = null;
-  let settings = { slot_capacity: 12, rotate_seconds: 30 };
+  let settings = { slot_capacity: 12, rotate_seconds: 30, manual_resume_seconds: 60 };
   let slideIndex = 0;
   let rotateTimer = null;
+  let resumeTimer = null;
+  let navTotalSlides = 1;
+  let navPrevButton = null;
+  let navNextButton = null;
 
   // Kapasitas 14 dan 16 menggunakan grid 4x4; kapasitas lain mengikuti grid ringkas.
   const GRID_LAYOUT = { 2: [2, 1], 4: [2, 2], 6: [3, 2], 8: [4, 2], 10: [5, 2], 12: [4, 3], 14: [4, 4], 16: [4, 4] };
@@ -78,22 +82,29 @@
     try {
       settings = await api(`/api/display-settings/${moduleName}`);
     } catch {
-      settings = { slot_capacity: 12, rotate_seconds: 30 };
+      settings = { slot_capacity: 12, rotate_seconds: 30, manual_resume_seconds: 60 };
     }
     const capacityField = document.getElementById("f-capacity");
     const rotateField = document.getElementById("f-rotate");
+    const resumeField = document.getElementById("f-resume");
     if (capacityField) capacityField.value = String(settings.slot_capacity);
     if (rotateField) rotateField.value = String(settings.rotate_seconds);
+    if (resumeField) resumeField.value = String(settings.manual_resume_seconds || 60);
   }
 
   async function saveSettings() {
     const capacityField = document.getElementById("f-capacity");
     const rotateField = document.getElementById("f-rotate");
+    const resumeField = document.getElementById("f-resume");
     if (!capacityField || !rotateField) return;
     try {
       settings = await api(`/api/display-settings/${moduleName}`, {
         method: "PUT",
-        body: { slot_capacity: Number(capacityField.value), rotate_seconds: Number(rotateField.value) }
+        body: {
+          slot_capacity: Number(capacityField.value),
+          rotate_seconds: Number(rotateField.value),
+          manual_resume_seconds: resumeField ? Number(resumeField.value) : (settings.manual_resume_seconds || 60)
+        }
       });
       updateCounters();
       if (currentView === "atur") renderArrange();
@@ -349,15 +360,15 @@
     applyGridLayout(grid, capacity);
     impl.stopDisplay();
     impl.startDisplay(grid, slideItems, capacity);
+    navTotalSlides = totalSlides;
+    updateSlideNav();
     return totalSlides;
   }
 
-  function startRotation() {
-    slideIndex = 0;
-    const totalSlides = renderSlide();
+  function startAutoRotation() {
     clearInterval(rotateTimer);
     rotateTimer = null;
-    if (totalSlides > 1) {
+    if (navTotalSlides > 1) {
       rotateTimer = setInterval(() => {
         slideIndex += 1;
         renderSlide();
@@ -365,9 +376,64 @@
     }
   }
 
+  function startRotation() {
+    slideIndex = 0;
+    clearTimeout(resumeTimer);
+    resumeTimer = null;
+    renderSlide();
+    startAutoRotation();
+  }
+
   function stopRotation() {
     clearInterval(rotateTimer);
     rotateTimer = null;
+    clearTimeout(resumeTimer);
+    resumeTimer = null;
+    navTotalSlides = 1;
+    updateSlideNav();
+  }
+
+  /* ---------- Tombol geser slide manual (tepi kiri/kanan layar tampil) ---------- */
+  function buildSlideNav() {
+    const section = document.querySelector('[data-view="tampilkan"]');
+    if (!section || navPrevButton) return;
+    const make = (direction, glyph, label) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `slide-nav ${direction < 0 ? "prev" : "next"}`;
+      button.textContent = glyph;
+      button.setAttribute("aria-label", label);
+      button.title = label;
+      button.hidden = true;
+      button.addEventListener("click", () => manualSlide(direction));
+      section.appendChild(button);
+      return button;
+    };
+    navPrevButton = make(-1, "‹", "Slide sebelumnya");
+    navNextButton = make(1, "›", "Slide berikutnya");
+  }
+
+  // Tombol hanya ada bila slide lebih dari satu dan sedang di layar tampil.
+  function updateSlideNav() {
+    const show = currentView === "tampilkan" && navTotalSlides > 1;
+    if (navPrevButton) navPrevButton.hidden = !show;
+    if (navNextButton) navNextButton.hidden = !show;
+  }
+
+  // Klik tombol: pindah slide sekarang, jeda putaran otomatis, dan jadwalkan
+  // kembali otomatis setelah manual_resume_seconds tanpa klik lanjutan.
+  function manualSlide(direction) {
+    if (currentView !== "tampilkan" || navTotalSlides <= 1) return;
+    clearInterval(rotateTimer);
+    rotateTimer = null;
+    slideIndex = ((slideIndex + direction) % navTotalSlides + navTotalSlides) % navTotalSlides;
+    renderSlide();
+    clearTimeout(resumeTimer);
+    resumeTimer = setTimeout(() => {
+      resumeTimer = null;
+      if (currentView !== "tampilkan") return;
+      startAutoRotation();
+    }, Math.max(10, Number(settings.manual_resume_seconds) || 60) * 1000);
   }
 
   function setupForm() {
@@ -398,6 +464,7 @@
 
   function register(implementation) {
     impl = implementation;
+    buildSlideNav();
 
     document.querySelectorAll("[data-go]").forEach((button) => {
       button.addEventListener("click", () => {

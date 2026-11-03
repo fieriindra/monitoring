@@ -46,6 +46,12 @@ async function initializeDatabase() {
     if (!labelCol.length) {
       await connection.query("ALTER TABLE ping_targets ADD COLUMN label VARCHAR(100) NULL AFTER target");
     }
+    const [resumeCol] = await connection.query(
+      "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'display_settings' AND COLUMN_NAME = 'manual_resume_seconds'"
+    );
+    if (!resumeCol.length) {
+      await connection.query("ALTER TABLE display_settings ADD COLUMN manual_resume_seconds INT NOT NULL DEFAULT 60");
+    }
   } finally {
     await connection.end();
   }

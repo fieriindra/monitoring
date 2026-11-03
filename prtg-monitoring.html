@@ -126,8 +126,11 @@
         <label>Jeda putar slide (detik)
           <input type="number" id="f-rotate" min="5" max="600" step="1" value="30">
         </label>
+        <label>Kembali otomatis setelah tombol manual diklik (detik)
+          <input type="number" id="f-resume" min="10" max="3600" step="1" value="60">
+        </label>
         <button class="btn" type="button" id="save-settings">Simpan Pengaturan</button>
-        <small>Lebih dari kapasitas = otomatis dibagi ke slide berikutnya, lalu berputar bergantian.</small>
+        <small>Lebih dari kapasitas = otomatis dibagi ke slide berikutnya, lalu berputar bergantian. Di layar tampil, tombol panah di tepi kiri/kanan layar memindahkan slide secara manual; putaran otomatis jalan lagi setelah jeda di atas tanpa klik.</small>
       </div>
       <div class="arrange-grid" id="arrange-grid"></div>
       <div class="form-actions">

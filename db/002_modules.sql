@@ -42,8 +42,10 @@ CREATE TABLE IF NOT EXISTS display_settings (
   module VARCHAR(10) NOT NULL PRIMARY KEY,
   slot_capacity INT NOT NULL DEFAULT 12,
   rotate_seconds INT NOT NULL DEFAULT 30,
+  manual_resume_seconds INT NOT NULL DEFAULT 60,
   CONSTRAINT chk_display_settings_capacity CHECK (slot_capacity IN (2, 4, 6, 8, 10, 12, 14, 16)),
-  CONSTRAINT chk_display_settings_rotate CHECK (rotate_seconds BETWEEN 5 AND 600)
+  CONSTRAINT chk_display_settings_rotate CHECK (rotate_seconds BETWEEN 5 AND 600),
+  CONSTRAINT chk_display_settings_resume CHECK (manual_resume_seconds BETWEEN 10 AND 3600)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 INSERT IGNORE INTO display_settings (module, slot_capacity, rotate_seconds) VALUES ('ping', 12, 30), ('prtg', 12, 30);
