@@ -42,8 +42,8 @@ async function runRestore() {
         const deviceId = d.id || res.insertId;
         for (const t of d.targets || []) {
           await connection.execute(
-            "INSERT INTO ping_targets (device_id, target, label, position) VALUES (?, ?, ?, ?)",
-            [deviceId, t.target || "", t.label || null, t.position || 1]
+            "INSERT INTO ping_targets (device_id, target, label, logical_system, position) VALUES (?, ?, ?, ?, ?)",
+            [deviceId, t.target || "", t.label || null, t.logical_system || null, t.position || 1]
           );
         }
       }

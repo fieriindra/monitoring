@@ -24,7 +24,7 @@ async function runBackup() {
     "SELECT id, label, host, port, username, password, device_type, ping_command, src_address, slot_order, is_active FROM ping_devices ORDER BY slot_order, id"
   );
   const [targets] = await pool.query(
-    "SELECT id, device_id, target, label, position FROM ping_targets ORDER BY position, id"
+    "SELECT id, device_id, target, label, logical_system, position FROM ping_targets ORDER BY position, id"
   );
   const [sensors] = await pool.query(
     "SELECT id, label, prtg_ip, sensor_id, username, passhash, time_range, slot_order, is_active FROM prtg_sensors ORDER BY slot_order, id"
@@ -37,6 +37,7 @@ async function runBackup() {
       id: t.id,
       target: t.target,
       label: t.label || null,
+      logical_system: t.logical_system || null,
       position: t.position
     });
   }

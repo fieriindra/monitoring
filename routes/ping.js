@@ -22,13 +22,24 @@ function createPingRouter({ pool, requireApiSession, worker }) {
   // Lampirkan daftar target (urut posisi) dan item slot per-target ke tiap baris perangkat.
   async function attachTargets(rows) {
     if (!rows.length) return rows;
-    const [targetRows] = await pool.query(
-      `SELECT id, device_id, target, label, position FROM ping_targets WHERE device_id IN (?) ORDER BY position, id`,
-      [rows.map((row) => row.id)]
-    );
+    let targetRows;
+    try {
+      [targetRows] = await pool.query(
+        `SELECT id, device_id, target, label, logical_system, position FROM ping_targets WHERE device_id IN (?) ORDER BY position, id`,
+        [rows.map((row) => row.id)]
+      );
+    } catch (error) {
+      // Kolom logical_system belum ada (database lama, worker belum sempat
+      // menjalankan migrasinya saat start): baca tanpa kolom itu.
+      if (error.code !== "ER_BAD_FIELD_ERROR") throw error;
+      [targetRows] = await pool.query(
+        `SELECT id, device_id, target, label, position FROM ping_targets WHERE device_id IN (?) ORDER BY position, id`,
+        [rows.map((row) => row.id)]
+      );
+    }
     const targetsByDevice = new Map();
     const targetItemsByDevice = new Map();
-    for (const { id, device_id: deviceId, target, label, position } of targetRows) {
+    for (const { id, device_id: deviceId, target, label, logical_system: logicalSystem, position } of targetRows) {
       if (!targetsByDevice.has(deviceId)) {
         targetsByDevice.set(deviceId, []);
         targetItemsByDevice.set(deviceId, []);
@@ -38,6 +49,7 @@ function createPingRouter({ pool, requireApiSession, worker }) {
         id,
         target: target || null,
         label: label || null,
+        logical_system: logicalSystem || null,
         slot_order: position
       });
     }
@@ -95,8 +107,8 @@ function createPingRouter({ pool, requireApiSession, worker }) {
       for (const entry of targetEntries) {
         nextPos += 1;
         await connection.execute(
-          "INSERT INTO ping_targets (device_id, target, label, position) VALUES (?, ?, ?, ?)",
-          [result.insertId, entry.target, entry.label, nextPos]
+          "INSERT INTO ping_targets (device_id, target, label, logical_system, position) VALUES (?, ?, ?, ?, ?)",
+          [result.insertId, entry.target, entry.label, device.device_type === "JUNIPER" ? (entry.logical_system ?? null) : null, nextPos]
         );
       }
       await normalizeTargetPositions(connection);
@@ -153,7 +165,13 @@ function createPingRouter({ pool, requireApiSession, worker }) {
         return response.status(404).json({ error: "Perangkat tidak ditemukan." });
       }
       // Pertahankan posisi slot dan custom label target yang sudah ada agar urutan/nama di ATUR POSISI tidak hilang saat edit perangkat.
-      const [oldTargets] = await connection.execute("SELECT target, label, position FROM ping_targets WHERE device_id = ?", [id]);
+      let oldTargets;
+      try {
+        [oldTargets] = await connection.execute("SELECT target, label, logical_system, position FROM ping_targets WHERE device_id = ?", [id]);
+      } catch (error) {
+        if (error.code !== "ER_BAD_FIELD_ERROR") throw error;
+        [oldTargets] = await connection.execute("SELECT target, label, position FROM ping_targets WHERE device_id = ?", [id]);
+      }
       const oldMap = new Map(oldTargets.map((row) => [row.target, row]));
       const [[{ maxPos }]] = await connection.query("SELECT COALESCE(MAX(position), 0) AS maxPos FROM ping_targets");
       let nextPos = Number(maxPos) || 0;
@@ -164,9 +182,16 @@ function createPingRouter({ pool, requireApiSession, worker }) {
         const prev = oldMap.get(entry.target);
         const pos = prev ? prev.position : ++nextPos;
         const customLabel = entry.label !== null ? entry.label : (prev ? prev.label : null);
+        // Logical-system hanya berlaku untuk Juniper. Field yang tidak dikirim
+        // (undefined) mempertahankan nilai lama; null/string menggantikannya.
+        const logicalSystem = device.device_type !== "JUNIPER"
+          ? null
+          : entry.logical_system !== undefined
+            ? entry.logical_system
+            : (prev ? prev.logical_system || null : null);
         await connection.execute(
-          "INSERT INTO ping_targets (device_id, target, label, position) VALUES (?, ?, ?, ?)",
-          [id, entry.target, customLabel, pos]
+          "INSERT INTO ping_targets (device_id, target, label, logical_system, position) VALUES (?, ?, ?, ?, ?)",
+          [id, entry.target, customLabel, logicalSystem, pos]
         );
       }
       await normalizeTargetPositions(connection);

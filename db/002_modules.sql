@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS ping_targets (
   device_id INT NOT NULL,
   target VARCHAR(100) NOT NULL,
   label VARCHAR(100) NULL,
+  logical_system VARCHAR(64) NULL,
   position INT NOT NULL DEFAULT 1,
   KEY idx_ping_targets_device (device_id, position),
   UNIQUE KEY uq_ping_targets_device_target (device_id, target),

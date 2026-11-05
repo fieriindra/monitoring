@@ -46,6 +46,12 @@ async function initializeDatabase() {
     if (!labelCol.length) {
       await connection.query("ALTER TABLE ping_targets ADD COLUMN label VARCHAR(100) NULL AFTER target");
     }
+    const [logicalSystemCol] = await connection.query(
+      "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ping_targets' AND COLUMN_NAME = 'logical_system'"
+    );
+    if (!logicalSystemCol.length) {
+      await connection.query("ALTER TABLE ping_targets ADD COLUMN logical_system VARCHAR(64) NULL AFTER label");
+    }
     const [resumeCol] = await connection.query(
       "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'display_settings' AND COLUMN_NAME = 'manual_resume_seconds'"
     );

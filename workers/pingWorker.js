@@ -3,6 +3,7 @@ const { Client } = require("ssh2");
 const { decrypt } = require("../lib/crypto");
 const { parsePing, summarize } = require("../lib/parsers");
 const { TimeoutTracker } = require("../lib/timeoutTracker");
+const { buildPingCommand } = require("../lib/pingCommand");
 
 const INTERVAL_MS = 1000;
 const CONNECT_TIMEOUT_MS = 8000;
@@ -193,14 +194,11 @@ class DeviceLoop {
     this.wake = null;
   }
 
-  commandFor(target) {
+  commandFor(entry) {
     // Template memakai <IP>; tanpa target (perangkat lama) diganti host perangkat.
-    let command = this.device.ping_command.replaceAll("<IP>", target || this.device.host);
-    // MikroTik: selipkan src-address= otomatis (diisi manual per perangkat) tepat setelah /ping.
-    if (this.device.device_type === "MIKROTIK" && this.device.src_address) {
-      command = command.replace(/^(\/ping\s+)/, `$1src-address=${this.device.src_address} `);
-    }
-    return command;
+    // Juniper: logical-system tujuan diselipkan sebelum IP; MikroTik:
+    // src-address= diselipkan setelah /ping. Lihat lib/pingCommand.js.
+    return buildPingCommand(this.device, entry);
   }
 
   drop() {
@@ -276,16 +274,17 @@ class DeviceLoop {
       const startedAt = Date.now();
       const targets = this.device.targets.length ? this.device.targets : [null];
       let failure = null;
-      for (const target of targets) {
+      for (const entry of targets) {
         if (this.stopped) break;
         let result = failure;
         if (!result) {
-          result = await this.probe(this.commandFor(target));
+          result = await this.probe(this.commandFor(entry));
           if (result.failed) failure = result;
         }
         if (this.stopped) break;
         const output = result.output.slice(0, MAX_OUTPUT_CHARS);
         const { status, latency } = parsePing(output);
+        const target = entry && entry.ip ? entry.ip : null;
         await this.owner.record(this.device, { target, status, latency, output });
       }
       await this.pause(INTERVAL_MS - (Date.now() - startedAt));
@@ -312,6 +311,7 @@ class PingWorker extends EventEmitter {
     while (!this.halted) {
       try {
         await this.ensureTimeoutLogSchema();
+        await this.ensureTargetLogicalSystemSchema();
         await this.refreshTimeoutThreshold();
         await this.reload();
         break;
@@ -398,6 +398,19 @@ class PingWorker extends EventEmitter {
     );
   }
 
+  // Kolom logical_system pada ping_targets (khusus Juniper: tiap tujuan bisa
+  // diarahkan ke logical-system-nya sendiri) ditambahkan otomatis agar
+  // instalasi lama yang hanya deploy + restart langsung mendapat fitur ini,
+  // sama seperti tabel LOG TIMEOUT di atas.
+  async ensureTargetLogicalSystemSchema() {
+    const [columns] = await this.pool.query(
+      "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ping_targets' AND COLUMN_NAME = 'logical_system'"
+    );
+    if (!columns.length) {
+      await this.pool.query("ALTER TABLE ping_targets ADD COLUMN logical_system VARCHAR(64) NULL AFTER label");
+    }
+  }
+
   // Ambang aktif dari pengaturan global; gagal baca (MySQL belum siap) memakai
   // nilai terakhir yang diketahui, dan awalnya default 3 detik.
   async refreshTimeoutThreshold() {
@@ -417,11 +430,18 @@ class PingWorker extends EventEmitter {
     const [rows] = await this.pool.execute(
       "SELECT id, label, host, port, username, password, device_type, ping_command, src_address FROM ping_devices WHERE is_active = 1 ORDER BY slot_order, id"
     );
-    const [targetRows] = await this.pool.execute("SELECT device_id, target FROM ping_targets ORDER BY device_id, position, id");
+    let targetRows;
+    try {
+      [targetRows] = await this.pool.execute("SELECT device_id, target, logical_system FROM ping_targets ORDER BY device_id, position, id");
+    } catch (error) {
+      // Kolom logical_system belum ada (migrasi di start belum berjalan).
+      if (error.code !== "ER_BAD_FIELD_ERROR") throw error;
+      [targetRows] = await this.pool.execute("SELECT device_id, target FROM ping_targets ORDER BY device_id, position, id");
+    }
     const targetsByDevice = new Map();
-    for (const { device_id: deviceId, target } of targetRows) {
+    for (const { device_id: deviceId, target, logical_system: logicalSystem } of targetRows) {
       if (!targetsByDevice.has(deviceId)) targetsByDevice.set(deviceId, []);
-      targetsByDevice.get(deviceId).push(target);
+      targetsByDevice.get(deviceId).push({ ip: target || "", logicalSystem: logicalSystem || null });
     }
     const wanted = new Map(rows.map((row) => [row.id, row]));
 

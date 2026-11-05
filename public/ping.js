@@ -216,7 +216,10 @@
     const targetLines = (item.target_items && item.target_items.length)
       ? item.target_items
           .filter((t) => t.target)
-          .map((t) => (t.label && t.label !== item.label ? `${t.target} | ${t.label}` : t.target))
+          .map((t) => {
+            const base = t.label && t.label !== item.label ? `${t.target} | ${t.label}` : t.target;
+            return t.logical_system ? `${base} | ls=${t.logical_system}` : base;
+          })
       : (item.targets || []);
     form.elements.targets.value = targetLines.join("\n");
     form.elements.ping_command.value = item.ping_command;
@@ -228,15 +231,24 @@
   function parseTargetLine(line) {
     const trimmed = line.trim();
     if (!trimmed) return null;
-    if (!trimmed.includes("|")) return { target: trimmed, label: null };
-    const [partA, ...rest] = trimmed.split("|");
-    const a = partA.trim();
-    const b = rest.join("|").trim();
+    // Segmen "ls=NAMA" (khusus Juniper) diarahkan ke logical-system; segmen
+    // lain adalah IP dan nama kolom seperti sebelumnya.
+    let logicalSystem = null;
+    const rest = [];
+    for (const segment of trimmed.split("|").map((part) => part.trim())) {
+      const lsMatch = segment.match(/^ls=(.+)$/i);
+      if (lsMatch) logicalSystem = lsMatch[1].trim();
+      else if (segment) rest.push(segment);
+    }
+    if (!rest.length) return null;
+    if (rest.length === 1) return { target: rest[0], label: null, logical_system: logicalSystem };
+    const a = rest[0];
+    const b = rest.slice(1).join("|");
     const ipLike = /^[A-Za-z0-9.:-]+$/;
     if (ipLike.test(a) && (!ipLike.test(b) || /^\d/.test(a))) {
-      return { target: a, label: b || null };
+      return { target: a, label: b || null, logical_system: logicalSystem };
     }
-    return { target: b, label: a || null };
+    return { target: b, label: a || null, logical_system: logicalSystem };
   }
 
   function buildPayload(form, isEdit) {
@@ -254,6 +266,9 @@
       }
       if (entry.label && entry.label.length > 100) {
         throw new Error(`Nama kolom "${entry.label}" maksimal 100 karakter.`);
+      }
+      if (entry.logical_system && !/^[A-Za-z0-9._-]{1,64}$/.test(entry.logical_system)) {
+        throw new Error(`Logical system "${entry.logical_system}" hanya boleh berisi huruf, angka, titik, strip, dan garis bawah (maksimal 64 karakter).`);
       }
     }
     if (rawLines.length && !command.includes("<IP>")) {
