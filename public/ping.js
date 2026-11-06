@@ -74,6 +74,28 @@
   function applyResult(data) {
     const entry = cells.get(cellKey(data.device_id, data.target));
     if (!entry) return;
+    // Gambar setiap hasil tepat satu kali per sel: worker menghasilkan
+    // paling banyak satu hasil per perangkat+tujuan per detik, jadi kunci
+    // created_at yang sama pada sel yang sama PASTI kiriman ganda (socket
+    // menumpuk, riwayat digambar ulang oleh startDisplay yang tumpang
+    // tindih, dsb.) dan dibuang. Dengan ini garis tampil selalu mengikuti
+    // irama aslinya — satu detik satu baris — berapa kali pun slide berganti
+    // atau tampilan dimulai ulang.
+    if (data.created_at) {
+      // Normalkan ke detik penuh: created_at dari WebSocket membawa
+      // milidetik asli, sedangkan dari riwayat API detik yang sama terbaca
+      // tanpa milidetik — keduanya harus menghasilkan kunci yang sama.
+      const seenKey = String(data.created_at).replace(/\.\d+/, "");
+      if (entry.seen.has(seenKey)) return;
+      entry.seen.add(seenKey);
+      if (entry.seen.size > 300) {
+        let pruned = 0;
+        for (const oldKey of entry.seen) {
+          entry.seen.delete(oldKey);
+          if (++pruned >= 150) break;
+        }
+      }
+    }
     const up = data.status === "UP";
     appendLine(entry, data, up ? "up" : "timeout");
     entry.cell.classList.toggle("up", up);
@@ -134,7 +156,7 @@
       term.className = "term";
       cell.append(head, term);
       grid.appendChild(cell);
-      cells.set(cellKey(device.id, target), { cell, term });
+      cells.set(cellKey(device.id, target), { cell, term, seen: new Set() });
     }
   }
 
