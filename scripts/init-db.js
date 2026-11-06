@@ -46,24 +46,6 @@ async function initializeDatabase() {
     if (!labelCol.length) {
       await connection.query("ALTER TABLE ping_targets ADD COLUMN label VARCHAR(100) NULL AFTER target");
     }
-    const [logicalSystemCol] = await connection.query(
-      "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ping_targets' AND COLUMN_NAME = 'logical_system'"
-    );
-    if (!logicalSystemCol.length) {
-      await connection.query("ALTER TABLE ping_targets ADD COLUMN logical_system VARCHAR(64) NULL AFTER label");
-    }
-    await connection.query(
-      `CREATE TABLE IF NOT EXISTS ping_device_jump_hosts (
-        device_id INT NOT NULL PRIMARY KEY,
-        jump_host VARCHAR(255) NOT NULL,
-        jump_port INT NOT NULL DEFAULT 22,
-        jump_username VARCHAR(100) NOT NULL,
-        jump_password VARCHAR(512) NOT NULL,
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        CONSTRAINT fk_ping_device_jump_hosts_device FOREIGN KEY (device_id)
-          REFERENCES ping_devices (id) ON DELETE CASCADE
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
-    );
     const [resumeCol] = await connection.query(
       "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'display_settings' AND COLUMN_NAME = 'manual_resume_seconds'"
     );

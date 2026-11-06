@@ -55,26 +55,10 @@ CREATE TABLE IF NOT EXISTS ping_targets (
   device_id INT NOT NULL,
   target VARCHAR(100) NOT NULL,
   label VARCHAR(100) NULL,
-  logical_system VARCHAR(64) NULL,
   position INT NOT NULL DEFAULT 1,
   KEY idx_ping_targets_device (device_id, position),
   UNIQUE KEY uq_ping_targets_device_target (device_id, target),
   CONSTRAINT fk_ping_targets_device FOREIGN KEY (device_id)
-    REFERENCES ping_devices (id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Konfigurasi jump host (SSH berantai) khusus per perangkat, dikelola
--- langsung di basis data (tidak ada antarmuka web/API). Worker menyambung
--- dulu ke jump host lalu membuka SSH bersarang ke perangkat. Baris ikut
--- terhapus otomatis saat perangkat dihapus (FK ON DELETE CASCADE).
-CREATE TABLE IF NOT EXISTS ping_device_jump_hosts (
-  device_id INT NOT NULL PRIMARY KEY,
-  jump_host VARCHAR(255) NOT NULL,
-  jump_port INT NOT NULL DEFAULT 22,
-  jump_username VARCHAR(100) NOT NULL,
-  jump_password VARCHAR(512) NOT NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT fk_ping_device_jump_hosts_device FOREIGN KEY (device_id)
     REFERENCES ping_devices (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

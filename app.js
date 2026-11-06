@@ -37,16 +37,7 @@ const sessionConfigurationError = "SESSION_SECRET belum dikonfigurasi. Isi secre
 
 app.disable("x-powered-by");
 app.use(express.json({ limit: "10kb" }));
-// Aset JS/CSS/HTML tidak boleh disajikan dari cache lama: layar tampil bisa
-// terbuka berjam-jam, dan setelah deploy perbaikan ia harus memuat kode baru
-// pada muat ulang berikutnya (no-cache = selalu validasi ulang ke server;
-// ETag membuat validasi itu murah, 304 bila belum berubah).
-app.use(express.static(path.join(__dirname, "public"), {
-  index: false,
-  setHeaders: (response, filePath) => {
-    if (/\.(?:js|css|html)$/.test(filePath)) response.setHeader("Cache-Control", "no-cache");
-  }
-}));
+app.use(express.static(path.join(__dirname, "public"), { index: false }));
 
 function signSession(userId, remember = true) {
   const payload = `${userId}.${remember ? "r" : "s"}`;

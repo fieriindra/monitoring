@@ -26,9 +26,6 @@
   let socket = null;
   let displayActive = false;
   let reconnectTimer = null;
-  // Penomoran generasi startDisplay: pemanggilan yang lebih baru membatalkan
-  // pemanggilan lama yang fetch riwayatnya belum selesai (lihat startDisplay).
-  let displayGeneration = 0;
   let cells = new Map();
 
   function clock(value) {
@@ -74,28 +71,6 @@
   function applyResult(data) {
     const entry = cells.get(cellKey(data.device_id, data.target));
     if (!entry) return;
-    // Gambar setiap hasil tepat satu kali per sel: worker menghasilkan
-    // paling banyak satu hasil per perangkat+tujuan per detik, jadi kunci
-    // created_at yang sama pada sel yang sama PASTI kiriman ganda (socket
-    // menumpuk, riwayat digambar ulang oleh startDisplay yang tumpang
-    // tindih, dsb.) dan dibuang. Dengan ini garis tampil selalu mengikuti
-    // irama aslinya — satu detik satu baris — berapa kali pun slide berganti
-    // atau tampilan dimulai ulang.
-    if (data.created_at) {
-      // Normalkan ke detik penuh: created_at dari WebSocket membawa
-      // milidetik asli, sedangkan dari riwayat API detik yang sama terbaca
-      // tanpa milidetik — keduanya harus menghasilkan kunci yang sama.
-      const seenKey = String(data.created_at).replace(/\.\d+/, "");
-      if (entry.seen.has(seenKey)) return;
-      entry.seen.add(seenKey);
-      if (entry.seen.size > 300) {
-        let pruned = 0;
-        for (const oldKey of entry.seen) {
-          entry.seen.delete(oldKey);
-          if (++pruned >= 150) break;
-        }
-      }
-    }
     const up = data.status === "UP";
     appendLine(entry, data, up ? "up" : "timeout");
     entry.cell.classList.toggle("up", up);
@@ -156,36 +131,23 @@
       term.className = "term";
       cell.append(head, term);
       grid.appendChild(cell);
-      cells.set(cellKey(device.id, target), { cell, term, seen: new Set() });
+      cells.set(cellKey(device.id, target), { cell, term });
     }
   }
 
   function connect() {
     if (!displayActive) return;
-    clearTimeout(reconnectTimer);
     indicator("connecting");
     const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${scheme}://${window.location.host}/ws/ping`);
-    socket = ws;
-    ws.addEventListener("open", () => {
-      if (socket === ws) indicator("on");
-    });
-    ws.addEventListener("message", (event) => {
-      if (socket !== ws) return;
+    socket = new WebSocket(`${scheme}://${window.location.host}/ws/ping`);
+    socket.addEventListener("open", () => indicator("on"));
+    socket.addEventListener("message", (event) => {
       try {
         const data = JSON.parse(event.data);
         if (data.type === "ping") applyResult(data);
       } catch { /* abaikan pesan rusak */ }
     });
-    ws.addEventListener("close", () => {
-      // Hanya socket yang masih tercatat aktif yang boleh menjadwalkan
-      // sambung ulang. Event close dari socket LAMA tiba belakangan — setelah
-      // stopDisplay menutupnya dan startDisplay sudah membuat socket baru
-      // serta menandai displayActive=true — sehingga tanpa penjaga ini
-      // setiap ganti slide/restart tampilan menambah satu socket hidup, dan
-      // setiap hasil ping digambar berulang sebanyak socket yang menumpuk.
-      if (socket !== ws) return;
-      socket = null;
+    socket.addEventListener("close", () => {
       indicator("off");
       if (displayActive) reconnectTimer = setTimeout(connect, RECONNECT_MS);
     });
@@ -193,18 +155,11 @@
 
   // columns: unit per-slot hasil Monitor.expand() (satu entri per device+target), sudah dipotong per slide.
   async function startDisplay(grid, columns, capacity) {
-    // startDisplay bisa tumpang tindih: panggilan berikutnya (ganti slide,
-    // route ulang, tab yang dibekukan lalu dipulihkan) dapat mulai saat fetch
-    // riwayat panggilan ini belum selesai. Tanpa penjaga generasi, panggilan
-    // lama ikut menggambar riwayatnya ke sel yang baru (baris tampil ganda)
-    // dan ikut membuka socket. Generasi memastikan hanya panggilan terakhir
-    // yang menggambar dan menyambung.
-    const generation = ++displayGeneration;
     displayActive = true;
     buildGrid(grid, columns, capacity);
     try {
       const recent = await Monitor.api("/api/ping/recent?limit=30");
-      if (!displayActive || generation !== displayGeneration) return;
+      if (!displayActive) return;
       for (const [key, rows] of Object.entries(recent)) {
         const entry = cells.get(key);
         if (!entry) continue;
@@ -215,15 +170,12 @@
         rows.forEach((row) => applyResult({ device_id: deviceId, target, ...row }));
       }
     } catch (error) {
-      if (generation === displayGeneration) Monitor.toast(error.message, "err");
-      return;
+      Monitor.toast(error.message, "err");
     }
-    if (!displayActive || generation !== displayGeneration) return;
     connect();
   }
 
   function stopDisplay() {
-    displayGeneration += 1;
     displayActive = false;
     clearTimeout(reconnectTimer);
     if (socket) {
@@ -264,10 +216,7 @@
     const targetLines = (item.target_items && item.target_items.length)
       ? item.target_items
           .filter((t) => t.target)
-          .map((t) => {
-            const base = t.label && t.label !== item.label ? `${t.target} | ${t.label}` : t.target;
-            return t.logical_system ? `${base} | ls=${t.logical_system}` : base;
-          })
+          .map((t) => (t.label && t.label !== item.label ? `${t.target} | ${t.label}` : t.target))
       : (item.targets || []);
     form.elements.targets.value = targetLines.join("\n");
     form.elements.ping_command.value = item.ping_command;
@@ -279,24 +228,15 @@
   function parseTargetLine(line) {
     const trimmed = line.trim();
     if (!trimmed) return null;
-    // Segmen "ls=NAMA" (khusus Juniper) diarahkan ke logical-system; segmen
-    // lain adalah IP dan nama kolom seperti sebelumnya.
-    let logicalSystem = null;
-    const rest = [];
-    for (const segment of trimmed.split("|").map((part) => part.trim())) {
-      const lsMatch = segment.match(/^ls=(.+)$/i);
-      if (lsMatch) logicalSystem = lsMatch[1].trim();
-      else if (segment) rest.push(segment);
-    }
-    if (!rest.length) return null;
-    if (rest.length === 1) return { target: rest[0], label: null, logical_system: logicalSystem };
-    const a = rest[0];
-    const b = rest.slice(1).join("|");
+    if (!trimmed.includes("|")) return { target: trimmed, label: null };
+    const [partA, ...rest] = trimmed.split("|");
+    const a = partA.trim();
+    const b = rest.join("|").trim();
     const ipLike = /^[A-Za-z0-9.:-]+$/;
     if (ipLike.test(a) && (!ipLike.test(b) || /^\d/.test(a))) {
-      return { target: a, label: b || null, logical_system: logicalSystem };
+      return { target: a, label: b || null };
     }
-    return { target: b, label: a || null, logical_system: logicalSystem };
+    return { target: b, label: a || null };
   }
 
   function buildPayload(form, isEdit) {
@@ -314,9 +254,6 @@
       }
       if (entry.label && entry.label.length > 100) {
         throw new Error(`Nama kolom "${entry.label}" maksimal 100 karakter.`);
-      }
-      if (entry.logical_system && !/^[A-Za-z0-9._-]{1,64}$/.test(entry.logical_system)) {
-        throw new Error(`Logical system "${entry.logical_system}" hanya boleh berisi huruf, angka, titik, strip, dan garis bawah (maksimal 64 karakter).`);
       }
     }
     if (rawLines.length && !command.includes("<IP>")) {
