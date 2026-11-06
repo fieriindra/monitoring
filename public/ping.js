@@ -26,6 +26,9 @@
   let socket = null;
   let displayActive = false;
   let reconnectTimer = null;
+  // Penomoran generasi startDisplay: pemanggilan yang lebih baru membatalkan
+  // pemanggilan lama yang fetch riwayatnya belum selesai (lihat startDisplay).
+  let displayGeneration = 0;
   let cells = new Map();
 
   function clock(value) {
@@ -168,11 +171,18 @@
 
   // columns: unit per-slot hasil Monitor.expand() (satu entri per device+target), sudah dipotong per slide.
   async function startDisplay(grid, columns, capacity) {
+    // startDisplay bisa tumpang tindih: panggilan berikutnya (ganti slide,
+    // route ulang, tab yang dibekukan lalu dipulihkan) dapat mulai saat fetch
+    // riwayat panggilan ini belum selesai. Tanpa penjaga generasi, panggilan
+    // lama ikut menggambar riwayatnya ke sel yang baru (baris tampil ganda)
+    // dan ikut membuka socket. Generasi memastikan hanya panggilan terakhir
+    // yang menggambar dan menyambung.
+    const generation = ++displayGeneration;
     displayActive = true;
     buildGrid(grid, columns, capacity);
     try {
       const recent = await Monitor.api("/api/ping/recent?limit=30");
-      if (!displayActive) return;
+      if (!displayActive || generation !== displayGeneration) return;
       for (const [key, rows] of Object.entries(recent)) {
         const entry = cells.get(key);
         if (!entry) continue;
@@ -183,12 +193,15 @@
         rows.forEach((row) => applyResult({ device_id: deviceId, target, ...row }));
       }
     } catch (error) {
-      Monitor.toast(error.message, "err");
+      if (generation === displayGeneration) Monitor.toast(error.message, "err");
+      return;
     }
+    if (!displayActive || generation !== displayGeneration) return;
     connect();
   }
 
   function stopDisplay() {
+    displayGeneration += 1;
     displayActive = false;
     clearTimeout(reconnectTimer);
     if (socket) {
