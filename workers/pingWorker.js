@@ -27,6 +27,12 @@ const TIMEOUT_SETTINGS_REFRESH_MS = 10000;
 const TIMEOUT_DETAIL_MAX_ENTRIES = 3600;
 const HUAWEI_PROMPT_RE = /(?:<[^>\r\n]+>|\[[^\]\r\n]+\])\s*$/;
 const HUAWEI_PROMPT_ANYWHERE_RE = /(?:<[^>\r\n]+>|\[[^\]\r\n]+\])/;
+// Prompt sudut Huawei saja (<NAMA>) — bentuk prompt sesaat setelah login
+// (user view). Dipakai pada login bersarang: alternatif kurung siku pada
+// HUAWEI_PROMPT_RE TIDAK boleh dipakai di sana, karena gambar-ulang konsol
+// RouterOS bisa berakhir tepat pada karakter "]" (potongan echo perintah)
+// dan terbaca sebagai prompt palsu sebelum kata sandi sempat dikirim.
+const HUAWEI_USER_PROMPT_RE = /<[^>\r\n]+>\s*$/;
 // Prompt konsol RouterOS pada jump host MikroTik, mis. "[kamal@Ro.OFC.HO] >".
 const MIKROTIK_PROMPT_RE = /\[[^\]\r\n]+@[^\]\r\n]+\]\s*>\s*$/;
 // Tahapan login bersarang (prompt MikroTik -> prompt password -> prompt
@@ -193,8 +199,9 @@ function openJumpShell(client, device) {
           }
           if (stage === "password-prompt") {
             // Perangkat bisa saja tidak meminta kata sandi (kunci publik):
-            // prompt Huawei yang langsung muncul juga diterima.
-            if (HUAWEI_PROMPT_RE.test(buffer)) return finish(null);
+            // prompt Huawei yang langsung muncul juga diterima — khusus
+            // bentuk sudutnya saja (lihat HUAWEI_USER_PROMPT_RE).
+            if (HUAWEI_USER_PROMPT_RE.test(buffer)) return finish(null);
             if (!/password:\s*$/i.test(buffer)) return;
             stage = "huawei-prompt";
             buffer = "";
@@ -204,11 +211,12 @@ function openJumpShell(client, device) {
           }
           // Tahap huawei-prompt: prompt "Password:" yang muncul lagi berarti
           // kata sandi ditolak — menyerah lebih baik daripada menebak-nebak;
-          // probe() akan mencoba ulang seluruh rantai satu kali.
+          // probe() akan mencoba ulang seluruh rantai satu kali. Prompt
+          // penanda selesai adalah bentuk sudut (user view setelah login).
           if (/password:\s*$/i.test(buffer)) {
             return finish(new Error("kata sandi perangkat ditolak saat login bersarang"));
           }
-          if (HUAWEI_PROMPT_RE.test(buffer)) return finish(null);
+          if (HUAWEI_USER_PROMPT_RE.test(buffer)) return finish(null);
         } catch (stageError) {
           return finish(stageError);
         }
