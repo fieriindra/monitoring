@@ -137,17 +137,30 @@
 
   function connect() {
     if (!displayActive) return;
+    clearTimeout(reconnectTimer);
     indicator("connecting");
     const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-    socket = new WebSocket(`${scheme}://${window.location.host}/ws/ping`);
-    socket.addEventListener("open", () => indicator("on"));
-    socket.addEventListener("message", (event) => {
+    const ws = new WebSocket(`${scheme}://${window.location.host}/ws/ping`);
+    socket = ws;
+    ws.addEventListener("open", () => {
+      if (socket === ws) indicator("on");
+    });
+    ws.addEventListener("message", (event) => {
+      if (socket !== ws) return;
       try {
         const data = JSON.parse(event.data);
         if (data.type === "ping") applyResult(data);
       } catch { /* abaikan pesan rusak */ }
     });
-    socket.addEventListener("close", () => {
+    ws.addEventListener("close", () => {
+      // Hanya socket yang masih tercatat aktif yang boleh menjadwalkan
+      // sambung ulang. Event close dari socket LAMA tiba belakangan — setelah
+      // stopDisplay menutupnya dan startDisplay sudah membuat socket baru
+      // serta menandai displayActive=true — sehingga tanpa penjaga ini
+      // setiap ganti slide/restart tampilan menambah satu socket hidup, dan
+      // setiap hasil ping digambar berulang sebanyak socket yang menumpuk.
+      if (socket !== ws) return;
+      socket = null;
       indicator("off");
       if (displayActive) reconnectTimer = setTimeout(connect, RECONNECT_MS);
     });
