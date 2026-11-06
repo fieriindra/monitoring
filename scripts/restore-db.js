@@ -31,6 +31,7 @@ async function runRestore() {
 
     if (Array.isArray(data.ping_devices)) {
       await connection.execute("DELETE FROM ping_targets");
+      // Baris ping_device_jump_hosts ikut terhapus lewat FK ON DELETE CASCADE.
       await connection.execute("DELETE FROM ping_devices");
       for (const d of data.ping_devices) {
         const encPass = d.password_plain ? encrypt(d.password_plain) : d.password_encrypted;
@@ -44,6 +45,13 @@ async function runRestore() {
           await connection.execute(
             "INSERT INTO ping_targets (device_id, target, label, logical_system, position) VALUES (?, ?, ?, ?, ?)",
             [deviceId, t.target || "", t.label || null, t.logical_system || null, t.position || 1]
+          );
+        }
+        if (d.jump_host) {
+          const encJumpPass = d.jump_host.password_plain ? encrypt(d.jump_host.password_plain) : d.jump_host.password_encrypted;
+          await connection.execute(
+            "INSERT INTO ping_device_jump_hosts (device_id, jump_host, jump_port, jump_username, jump_password) VALUES (?, ?, ?, ?, ?)",
+            [deviceId, d.jump_host.host, d.jump_host.port || 22, d.jump_host.username, encJumpPass]
           );
         }
       }

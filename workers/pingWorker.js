@@ -4,6 +4,7 @@ const { decrypt } = require("../lib/crypto");
 const { parsePing, summarize } = require("../lib/parsers");
 const { TimeoutTracker } = require("../lib/timeoutTracker");
 const { buildPingCommand } = require("../lib/pingCommand");
+const { normalizeJumpConfig, buildNestedSshCommand } = require("../lib/jumpHost");
 
 const INTERVAL_MS = 1000;
 const CONNECT_TIMEOUT_MS = 8000;
@@ -26,6 +27,12 @@ const TIMEOUT_SETTINGS_REFRESH_MS = 10000;
 const TIMEOUT_DETAIL_MAX_ENTRIES = 3600;
 const HUAWEI_PROMPT_RE = /(?:<[^>\r\n]+>|\[[^\]\r\n]+\])\s*$/;
 const HUAWEI_PROMPT_ANYWHERE_RE = /(?:<[^>\r\n]+>|\[[^\]\r\n]+\])/;
+// Prompt konsol RouterOS pada jump host MikroTik, mis. "[kamal@Ro.OFC.HO] >".
+const MIKROTIK_PROMPT_RE = /\[[^\]\r\n]+@[^\]\r\n]+\]\s*>\s*$/;
+// Tahapan login bersarang (prompt MikroTik -> prompt password -> prompt
+// Huawei) diberi waktu lebih longgar daripada koneksi langsung: jalurnya
+// dua lompatan dan konsol RouterOS lambat menggambar ulang layarnya.
+const JUMP_STAGE_TIMEOUT_MS = 20000;
 
 // Output ping sudah bisa diputuskan hasilnya (bukan kegagalan SSH) bila memuat
 // statistik akhir, baris "Request time out", atau setidaknya satu balasan.
@@ -59,11 +66,15 @@ function connect(device) {
       settled = true;
       resolve(client);
     });
+    // Perangkat ber-jump host: koneksi SSH pertama dibuka ke jump host-nya;
+    // lompatan kedua ke perangkat tujuan dilakukan di dalam shell (lihat
+    // openJumpShell). Tanpa jump host, sambung langsung ke perangkat.
+    const target = device.jump || device;
     client.connect({
-      host: device.host,
-      port: device.port,
-      username: device.username,
-      password: device.password,
+      host: target.host,
+      port: target.port,
+      username: target.username,
+      password: target.password,
       readyTimeout: CONNECT_TIMEOUT_MS,
       keepaliveInterval: 10000,
       // Perangkat lama (Huawei/Juniper/MikroTik versi lawas) kadang hanya mendukung kex ini.
@@ -134,6 +145,82 @@ function openInteractiveShell(client) {
   });
 }
 
+// Buka shell di jump host MikroTik lalu masuk SSH bersarang ke perangkat
+// Huawei tujuan. Urutannya: tunggu prompt RouterOS, kirim perintah
+// "/system ssh ..." (lib/jumpHost.js), tunggu prompt "Password:", kirim kata
+// sandi PERANGKAT, lalu tunggu prompt Huawei. Sesudah itu stream berperilaku
+// persis seperti shell Huawei langsung sehingga runShellCommand berlaku apa
+// adanya. Lompatan kedua sengaja lewat klien SSH RouterOS di dalam shell —
+// forwarding TCP (direct-tcpip) pada jump host bisa saja dimatikan, dan cara
+// ini tidak bergantung padanya.
+function openJumpShell(client, device) {
+  return new Promise((resolve, reject) => {
+    client.shell({ term: "dumb", cols: 200, rows: 40 }, (error, stream) => {
+      if (error) return reject(error);
+      let buffer = "";
+      let stage = "mikrotik-prompt";
+      let settled = false;
+      let timer = null;
+      const finish = (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        stream.removeListener("data", onData);
+        stream.removeListener("close", onClose);
+        if (err) {
+          try { stream.close(); } catch { /* abaikan */ }
+          reject(err);
+        } else {
+          resolve(stream);
+        }
+      };
+      const armTimer = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => finish(new Error(`login bersarang berhenti di tahap ${stage}`)), JUMP_STAGE_TIMEOUT_MS);
+      };
+      const onClose = () => finish(new Error("shell jump host tertutup sebelum login bersarang selesai"));
+      const onData = (chunk) => {
+        buffer += chunk.toString("utf8");
+        if (buffer.length > MAX_OUTPUT_CHARS) buffer = buffer.slice(-MAX_OUTPUT_CHARS);
+        try {
+          if (stage === "mikrotik-prompt") {
+            if (!MIKROTIK_PROMPT_RE.test(buffer)) return;
+            stage = "password-prompt";
+            buffer = "";
+            armTimer();
+            stream.write(`${buildNestedSshCommand(device)}\r`);
+            return;
+          }
+          if (stage === "password-prompt") {
+            // Perangkat bisa saja tidak meminta kata sandi (kunci publik):
+            // prompt Huawei yang langsung muncul juga diterima.
+            if (HUAWEI_PROMPT_RE.test(buffer)) return finish(null);
+            if (!/password:\s*$/i.test(buffer)) return;
+            stage = "huawei-prompt";
+            buffer = "";
+            armTimer();
+            stream.write(`${device.password}\r`);
+            return;
+          }
+          // Tahap huawei-prompt: prompt "Password:" yang muncul lagi berarti
+          // kata sandi ditolak — menyerah lebih baik daripada menebak-nebak;
+          // probe() akan mencoba ulang seluruh rantai satu kali.
+          if (/password:\s*$/i.test(buffer)) {
+            return finish(new Error("kata sandi perangkat ditolak saat login bersarang"));
+          }
+          if (HUAWEI_PROMPT_RE.test(buffer)) return finish(null);
+        } catch (stageError) {
+          return finish(stageError);
+        }
+        return undefined;
+      };
+      armTimer();
+      stream.on("data", onData);
+      stream.once("close", onClose);
+    });
+  });
+}
+
 function runShellCommand(stream, command) {
   return new Promise((resolve, reject) => {
     let output = "";
@@ -179,8 +266,9 @@ function runShellCommand(stream, command) {
 
 // Tanda tangan konfigurasi yang memengaruhi cara loop ping jalan; dipakai reload() untuk
 // mendeteksi device yang diedit (host/password/command/target berubah) agar loop di-restart.
-function signature(row, targets) {
-  return JSON.stringify([row.host, row.port, row.username, row.password, row.ping_command, row.src_address, targets]);
+function signature(row, targets, jump) {
+  const jumpPart = jump ? [jump.host, jump.port, jump.username, jump.password] : null;
+  return JSON.stringify([row.host, row.port, row.username, row.password, row.ping_command, row.src_address, targets, jumpPart]);
 }
 
 class DeviceLoop {
@@ -240,7 +328,9 @@ class DeviceLoop {
     }
     if (this.device.device_type === "HUAWEI") {
       if (!this.shellStream) {
-        this.shellStream = await openInteractiveShell(this.client);
+        this.shellStream = this.device.jump
+          ? await openJumpShell(this.client, this.device)
+          : await openInteractiveShell(this.client);
         const stream = this.shellStream;
         stream.once("close", () => {
           if (this.shellStream === stream) this.shellStream = null;
@@ -312,6 +402,7 @@ class PingWorker extends EventEmitter {
       try {
         await this.ensureTimeoutLogSchema();
         await this.ensureTargetLogicalSystemSchema();
+        await this.ensureJumpHostSchema();
         await this.refreshTimeoutThreshold();
         await this.reload();
         break;
@@ -411,6 +502,25 @@ class PingWorker extends EventEmitter {
     }
   }
 
+  // Tabel konfigurasi jump host khusus per perangkat (dikelola langsung di
+  // basis data; tidak ada antarmuka web/API). FK ON DELETE CASCADE membuat
+  // konfigurasi khusus ikut terhapus saat perangkatnya dihapus. Dibuat
+  // otomatis dengan alasan yang sama seperti tabel LOG TIMEOUT.
+  async ensureJumpHostSchema() {
+    await this.pool.query(
+      `CREATE TABLE IF NOT EXISTS ping_device_jump_hosts (
+        device_id INT NOT NULL PRIMARY KEY,
+        jump_host VARCHAR(255) NOT NULL,
+        jump_port INT NOT NULL DEFAULT 22,
+        jump_username VARCHAR(100) NOT NULL,
+        jump_password VARCHAR(512) NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT fk_ping_device_jump_hosts_device FOREIGN KEY (device_id)
+          REFERENCES ping_devices (id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+    );
+  }
+
   // Ambang aktif dari pengaturan global; gagal baca (MySQL belum siap) memakai
   // nilai terakhir yang diketahui, dan awalnya default 3 detik.
   async refreshTimeoutThreshold() {
@@ -443,6 +553,28 @@ class PingWorker extends EventEmitter {
       if (!targetsByDevice.has(deviceId)) targetsByDevice.set(deviceId, []);
       targetsByDevice.get(deviceId).push({ ip: target || "", logicalSystem: logicalSystem || null });
     }
+    // Konfigurasi jump host khusus per perangkat (tabel dikelola langsung di
+    // basis data, tanpa antarmuka web/API). Instalasi yang belum punya
+    // tabelnya diperlakukan sebagai tanpa jump host.
+    const jumpByDevice = new Map();
+    const invalidJumpDevices = new Set();
+    let jumpRows = [];
+    try {
+      [jumpRows] = await this.pool.execute(
+        "SELECT device_id, jump_host, jump_port, jump_username, jump_password FROM ping_device_jump_hosts"
+      );
+    } catch (error) {
+      if (error.code !== "ER_NO_SUCH_TABLE") throw error;
+    }
+    for (const jumpRow of jumpRows) {
+      try {
+        const normalized = normalizeJumpConfig(jumpRow);
+        if (normalized) jumpByDevice.set(normalized.deviceId, normalized);
+      } catch (error) {
+        console.error(`Konfigurasi jump host perangkat #${jumpRow.device_id} tidak valid (${error.message}); perangkat dilewati.`);
+        invalidJumpDevices.add(Number(jumpRow.device_id));
+      }
+    }
     const wanted = new Map(rows.map((row) => [row.id, row]));
 
     for (const [id, loop] of this.loops) {
@@ -470,7 +602,44 @@ class PingWorker extends EventEmitter {
         console.error(`Password perangkat #${row.id} tidak bisa didekripsi; perangkat dilewati.`);
         continue;
       }
-      const sig = signature(row, targets);
+      // Jump host khusus perangkat ini (bila ada): konfigurasi rusak, tipe
+      // perangkat yang belum didukung, atau password jump yang tidak bisa
+      // didekripsi membuat perangkat dilewati — dan loop lamanya dihentikan
+      // agar tidak terus berjalan dengan konfigurasi yang sudah tidak sah.
+      const skipDevice = () => {
+        const stale = this.loops.get(row.id);
+        if (stale) {
+          stale.stop();
+          this.loops.delete(row.id);
+        }
+      };
+      let jump = null;
+      if (invalidJumpDevices.has(row.id)) {
+        skipDevice();
+        continue;
+      }
+      const jumpConfig = jumpByDevice.get(row.id);
+      if (jumpConfig) {
+        if (row.device_type !== "HUAWEI") {
+          console.error(`Perangkat #${row.id} punya konfigurasi jump host tetapi bertipe ${row.device_type}; jump host hanya didukung untuk HUAWEI — perangkat dilewati.`);
+          skipDevice();
+          continue;
+        }
+        try {
+          jump = {
+            host: jumpConfig.host,
+            port: jumpConfig.port,
+            username: jumpConfig.username,
+            password: decrypt(jumpConfig.passwordCipher)
+          };
+        } catch (error) {
+          if (error.code === "APP_ENCRYPTION_NOT_CONFIGURED") throw error;
+          console.error(`Password jump host perangkat #${row.id} tidak bisa didekripsi; perangkat dilewati.`);
+          skipDevice();
+          continue;
+        }
+      }
+      const sig = signature(row, targets, jump);
       const existing = this.loops.get(row.id);
       // Perangkat sudah di-edit (host/password/command/target berubah): hentikan loop lama, mulai ulang.
       if (existing) {
@@ -478,7 +647,7 @@ class PingWorker extends EventEmitter {
         existing.stop();
         this.loops.delete(row.id);
       }
-      const loop = new DeviceLoop({ ...row, password, targets }, this);
+      const loop = new DeviceLoop({ ...row, password, targets, jump }, this);
       loop.sig = sig;
       this.loops.set(row.id, loop);
       loop.run().catch((error) => console.error(`Loop perangkat #${row.id} berhenti:`, error.message));

@@ -26,6 +26,23 @@ async function runBackup() {
   const [targets] = await pool.query(
     "SELECT id, device_id, target, label, logical_system, position FROM ping_targets ORDER BY position, id"
   );
+  // Konfigurasi jump host khusus per perangkat (tabel opsional — instalasi
+  // lama bisa belum punya).
+  let jumpHosts = [];
+  try {
+    [jumpHosts] = await pool.query(
+      "SELECT device_id, jump_host, jump_port, jump_username, jump_password FROM ping_device_jump_hosts"
+    );
+  } catch (error) {
+    if (error.code !== "ER_NO_SUCH_TABLE") throw error;
+  }
+  const jumpByDevice = new Map(jumpHosts.map((j) => [j.device_id, {
+    host: j.jump_host,
+    port: j.jump_port,
+    username: j.jump_username,
+    password_plain: safeDecrypt(j.jump_password),
+    password_encrypted: j.jump_password
+  }]));
   const [sensors] = await pool.query(
     "SELECT id, label, prtg_ip, sensor_id, username, passhash, time_range, slot_order, is_active FROM prtg_sensors ORDER BY slot_order, id"
   );
@@ -58,7 +75,8 @@ async function runBackup() {
       src_address: d.src_address,
       slot_order: d.slot_order,
       is_active: d.is_active,
-      targets: targetsByDevice.get(d.id) || []
+      targets: targetsByDevice.get(d.id) || [],
+      jump_host: jumpByDevice.get(d.id) || null
     })),
     prtg_sensors: sensors.map((s) => ({
       id: s.id,
